@@ -23,7 +23,7 @@ type ModalTime = { hour: number; minute: number };
 const TOTAL_HOURS = 31; // 翌朝7時までの31時間
 const MINUTES_PER_HOUR = 60;
 const TOTAL_MINUTES = TOTAL_HOURS * MINUTES_PER_HOUR;
-const MIN_ZOOM_THRESHOLD = 0.3; // PWAプロンプトを表示するズームのしきい値
+const MIN_ZOOM_THRESHOLD = 0.3; // PWAインストールボタンを表示するズームのしきい値
 
 /**
  * 24hタイムライン アプリケーションのメインページ
@@ -58,8 +58,7 @@ export default function HomePage() {
   
   // ★ PWA関連 (変更なし) ★
   const [deferredPrompt, setDeferredPrompt] = useState<Event | null>(null);
-  // ★★★ 変更点 ★★★
-  // toggleCount と lastToggleTime の useState を削除
+  // toggleCount と lastToggleTime は削除済み
 
   // --- Ref (変更なし) ---
   const mainContentRef = useRef<HTMLDivElement>(null);
@@ -224,28 +223,11 @@ export default function HomePage() {
   };
 
   // ★★★ 変更点 ★★★
-  // --- ズーム機能 (PWAインストールトリガーを統合) ---
+  // --- ズーム機能 (PWAインストールトリガーを削除) ---
   const handleZoom = (newPixelsPerMinute: number) => {
     if (!mainContentRef.current) return;
 
-    // ★ PWAトリガー ★
-    // もし、ズームアウトしようとして（new < old）、
-    // 新しいズームレベルが最小値（MIN_ZOOM_THRESHOLD）以下に達し、
-    // かつ、インストールプロンプト（deferredPrompt）が存在する場合
-    if (newPixelsPerMinute < pixelsPerMinute && newPixelsPerMinute <= MIN_ZOOM_THRESHOLD && deferredPrompt) {
-      console.log('Attempting to show PWA install prompt via zoom out');
-      (deferredPrompt as any).prompt(); // プロンプト表示
-      (deferredPrompt as any).userChoice.then((choiceResult: any) => {
-        if (choiceResult.outcome === 'accepted') {
-          console.log('User accepted the PWA install prompt');
-        } else {
-          console.log('User dismissed the PWA install prompt');
-        }
-        setDeferredPrompt(null); // プロンプトは一度しか使えないのでクリア
-      });
-      // プロンプトを表示した場合、ズームアウトは実行しない（誤操作防止）
-      return; 
-    }
+    // ★ PWAトリガーのロジックをここから削除 ★
     
     // --- 通常のズームロジック（変更なし） ---
     const mainRect = mainContentRef.current.getBoundingClientRect();
@@ -264,7 +246,24 @@ export default function HomePage() {
 
   // zoomIn / zoomOut は handleZoom を呼ぶだけ (変更なし)
   const zoomIn = () => handleZoom(Math.min(pixelsPerMinute * 1.5, 20));
-  const zoomOut = () => handleZoom(Math.max(pixelsPerMinute / 1.5, 0.2));
+  // ズームアウトの最小値を MIN_ZOOM_THRESHOLD に設定
+  const zoomOut = () => handleZoom(Math.max(pixelsPerMinute / 1.5, MIN_ZOOM_THRESHOLD));
+
+  // ★★★ 変更点 ★★★
+  // --- PWAインストールボタン用クリックハンドラ ---
+  const handleInstallClick = () => {
+    if (deferredPrompt) {
+      (deferredPrompt as any).prompt(); // プロンプト表示
+      (deferredPrompt as any).userChoice.then((choiceResult: any) => {
+        if (choiceResult.outcome === 'accepted') {
+          console.log('User accepted the PWA install prompt');
+        } else {
+          console.log('User dismissed the PWA install prompt');
+        }
+        setDeferredPrompt(null); // プロンプトは一度しか使えないのでクリア
+      });
+    }
+  };
 
   // --- 赤いバー用の計算 (変更なし) ---
   const currentMinute = currentTime.getHours() * 60 + currentTime.getMinutes();
@@ -346,8 +345,7 @@ export default function HomePage() {
     }
   };
 
-  // ★★★ 変更点 ★★★
-  // PWA関連 (トグル10回ロジックを削除)
+  // PWA関連 (トグル10回ロジックを削除) (変更なし)
   const handleToggleEditMode = (newEditMode: boolean) => {
     // 自動保存ロジック（変更なし）
     if (isEditMode && !newEditMode) {
@@ -358,8 +356,6 @@ export default function HomePage() {
       setSelectionAnchor(null);
     }
     setIsEditMode(newEditMode);
-    
-    // ★ PWA関連のトグルカウントロジックを「全て削除」 ★
   };
 
   // --- 一括削除 (API呼び出し) (変更なし) ---
@@ -652,7 +648,31 @@ export default function HomePage() {
       </div>
 
       
-      {/* --- 4. 一括操作パネル (一斉解除) --- */}
+      {/* ★★★ 変更点 ★★★ */}
+      {/* --- 4. PWAインストールボタン (ズームアウトで表示) --- */}
+      {/* deferredPrompt (インストール可能) で、
+        かつ pixelsPerMinute (ズームレベル) が最小値以下の時だけ表示
+      */}
+      {deferredPrompt && pixelsPerMinute <= MIN_ZOOM_THRESHOLD && (
+        <button
+          onClick={handleInstallClick}
+          className="fixed bottom-40 right-6 z-30 
+                     md:hidden 
+                     w-14 h-14 rounded-full 
+                     bg-primary text-primary-foreground 
+                     shadow-lg text-2xl hover:bg-primary/80
+                     flex items-center justify-center"
+          title="アプリをインストール"
+        >
+          {/* SVGアイコン (例: ダウンロード) */}
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-7 h-7">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+          </svg>
+        </button>
+      )}
+
+
+      {/* --- 5. 一括操作パネル (一斉解除) --- */}
       {isEditMode && selectedTaskIds.size > 0 && (
         <div 
           className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 
@@ -699,7 +719,7 @@ export default function HomePage() {
       )}
 
 
-      {/* --- 5. モーダル (固定) (変更なし) --- */}
+      {/* --- 6. モーダル (固定) (変更なし) --- */}
       <div
         className={`fixed inset-0 flex items-center justify-center z-50 transition-opacity duration-300 ${
           isModalOpen ? "opacity-100" : "opacity-0 pointer-events-none"
