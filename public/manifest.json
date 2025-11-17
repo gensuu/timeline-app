@@ -6,7 +6,6 @@
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
-
   "theme_color": "#242936",
   "background_color": "#242936",
 
@@ -22,12 +21,6 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
-    },
-    {
-      "src": "/icon-maskable-512x512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
     }
   ]
 }
