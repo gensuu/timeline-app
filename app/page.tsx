@@ -11,11 +11,22 @@ import {
   DragEvent 
 } from "react";
 
-// --- 型定義 (変更なし) ---
+// --- 型定義 (テンプレート機能を追加) ---
 interface Task {
   id: string;
   title: string;
   timeInMinutes: number;
+}
+// テンプレート（と、それに含まれるタスク）の型
+interface TemplateTask {
+  id: string;
+  title: string;
+  timeOffsetInMinutes: number;
+}
+interface Template {
+  id: string;
+  name: string;
+  tasks: TemplateTask[];
 }
 type ModalTime = { hour: number; minute: number };
 
@@ -37,10 +48,7 @@ export default function HomePage() {
   const [modalTitle, setModalTitle] = useState("");
   const [modalTime, setModalTime] = useState<ModalTime>({ hour: 0, minute: 0 });
   const [pixelsPerMinute, setPixelsPerMinute] = useState(2); 
-
-  // ★★★ 変更点 ★★★
-  // 初期描画時のズレをなくすため、初期値を null に設定
-  const [currentTime, setCurrentTime] = useState<Date | null>(null);
+  const [currentTime, setCurrentTime] = useState<Date | null>(null); // 赤いバーのズレ修正 (null初期化)
 
   // --- 範囲選択 (既存) ---
   const [selectedTaskIds, setSelectedTaskIds] = useState(new Set<string>());
@@ -59,6 +67,14 @@ export default function HomePage() {
   
   // ★ PWA関連 (変更なし) ★
   const [deferredPrompt, setDeferredPrompt] = useState<Event | null>(null);
+  
+  // ★★★ テンプレート機能用の State (変更なし) ★★★
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+  const [isSaveTemplateModalOpen, setIsSaveTemplateModalOpen] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState("");
+  // ★★★ ここまで ★★★
+
 
   // --- Ref (変更なし) ---
   const mainContentRef = useRef<HTMLDivElement>(null);
@@ -87,14 +103,25 @@ export default function HomePage() {
     }
   }, []); 
 
-  // ★★★ 変更点 ★★★
-  // --- useEffect (マウント時) (クライアント時刻で同期) ---
+  // ★ テンプレート取得 (変更なし) ★
+  const fetchTemplates = useCallback(async () => {
+    try {
+      const response = await fetch("/api/templates");
+      if (response.ok) {
+        setTemplates(await response.json());
+      }
+    } catch (error) {
+      console.error("テンプレートの取得エラー:", error);
+    }
+  }, []);
+
+  // --- useEffect (マウント時) (変更なし) ---
   useEffect(() => {
     fetchTasks();
+    fetchTemplates(); // ★ テンプレートも取得
     
     // クライアント（ブラウザ）の現在時刻を「今」取得する
     const now = new Date();
-    // ★ 赤いバーの State をクライアント時刻で更新
     setCurrentTime(now); 
     
     const currentMinute = now.getHours() * 60 + now.getMinutes();
@@ -104,10 +131,8 @@ export default function HomePage() {
     if (mainContentRef.current) mainContentRef.current.scrollTop = scrollPosition - centerOffset;
     if (sidebarRef.current) sidebarRef.current.scrollTop = scrollPosition - centerOffset;
     
-    // ★ 更新間隔を 60秒 -> 10秒 に変更
     const timer = setInterval(() => setCurrentTime(new Date()), 10000); // 10秒ごと
 
-    // ★ PWAインストールプロンプトのイベントリスナー (変更なし) ★
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e);
@@ -120,7 +145,7 @@ export default function HomePage() {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchTasks]); // pixelsPerMinute は意図的に除外（起動時のみ実行）
+  }, [fetchTasks, fetchTemplates]); // pixelsPerMinute は意図的に除外（起動時のみ実行）
 
   // --- 時間変換ユーティリティ (変更なし) ---
   const minutesToTime = (minutes: number): ModalTime => ({
@@ -136,7 +161,7 @@ export default function HomePage() {
 
   // --- イベントハンドラ (時間ズレ修正版) (変更なし) ---
   const handleBackgroundClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isEditMode || isModalOpen) return;
+    if (!isEditMode || isModalOpen || isTemplateModalOpen || isSaveTemplateModalOpen) return;
     if ((e.target as HTMLElement).closest('.task-item')) return;
     if (!mainContentRef.current) return;
 
@@ -168,7 +193,7 @@ export default function HomePage() {
     setIsModalOpen(true);
   };
 
-  // --- API連携 (削除ボタン修正版) (変更なし) ---
+  // --- API連携 (変更なし) ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!modalTitle) return;
@@ -211,8 +236,20 @@ export default function HomePage() {
     }
   };
 
+  // --- モーダル (変更なし) ---
   const closeModal = () => setIsModalOpen(false);
-  
+  const openTemplateModal = () => {
+    closeModal(); 
+    setIsTemplateModalOpen(true);
+  };
+  const closeTemplateModal = () => setIsTemplateModalOpen(false);
+  const openSaveTemplateModal = () => {
+    setIsSaveTemplateModalOpen(true);
+    setNewTemplateName("");
+  };
+  const closeSaveTemplateModal = () => setIsSaveTemplateModalOpen(false);
+
+
   // --- JSスクロール同期 (変更なし) ---
   const handleScroll = (source: 'sidebar' | 'main') => {
     if (isSyncingScroll.current) {
@@ -228,74 +265,53 @@ export default function HomePage() {
     }
   };
 
-  // --- ズーム機能 (PWAインストールトリガーを削除) (変更なし) ---
+  // --- ズーム機能 (変更なし) ---
   const handleZoom = (newPixelsPerMinute: number) => {
     if (!mainContentRef.current) return;
-    
-    // --- 通常のズームロジック（変更なし） ---
     const mainRect = mainContentRef.current.getBoundingClientRect();
     const centerViewportY = mainRect.top + mainRect.height / 2;
-    const centerAbsoluteY = mainContentRef.current.scrollTop + (centerViewportY - mainRect.top);
-    const centerMinute = centerAbsoluteY / pixelsPerMinute;
-    
-    setPixelsPerMinute(newPixelsPerMinute); // Stateを更新
-    
+    const absoluteY = mainContentRef.current.scrollTop + (centerViewportY - mainRect.top);
+    const centerMinute = absoluteY / pixelsPerMinute;
+    setPixelsPerMinute(newPixelsPerMinute); 
     const newScrollTop = (centerMinute * newPixelsPerMinute) - (mainRect.height / 2);
     requestAnimationFrame(() => {
       if (mainContentRef.current) mainContentRef.current.scrollTop = newScrollTop;
       if (sidebarRef.current) sidebarRef.current.scrollTop = newScrollTop;
     });
   };
-
-  // zoomIn / zoomOut は handleZoom を呼ぶだけ (変更なし)
   const zoomIn = () => handleZoom(Math.min(pixelsPerMinute * 1.5, 20));
   const zoomOut = () => handleZoom(Math.max(pixelsPerMinute / 1.5, MIN_ZOOM_THRESHOLD));
 
-  // --- PWAインストールボタン用クリックハンドラ (変更なし) ---
+  // --- PWAインストール (変更なし) ---
   const handleInstallClick = () => {
     if (deferredPrompt) {
-      (deferredPrompt as any).prompt(); // プロンプト表示
+      (deferredPrompt as any).prompt(); 
       (deferredPrompt as any).userChoice.then((choiceResult: any) => {
-        if (choiceResult.outcome === 'accepted') {
-          console.log('User accepted the PWA install prompt');
-        } else {
-          console.log('User dismissed the PWA install prompt');
-        }
-        setDeferredPrompt(null); // プロンプトは一度しか使えないのでクリア
+        setDeferredPrompt(null); 
       });
     }
   };
 
-  // ★★★ 変更点 ★★★
-  // --- 赤いバー用の計算 (currentTime が null の場合を考慮) ---
+  // --- 赤いバー (変更なし) ---
   const currentMinute = currentTime 
     ? currentTime.getHours() * 60 + currentTime.getMinutes() 
     : 0;
   const currentTimeTopPx = currentMinute * pixelsPerMinute;
 
-  // 2点クリック範囲選択 (既存)
+  // --- 範囲選択 (変更なし) ---
   const handleCheckboxClick = (e: React.MouseEvent, taskId: string) => {
     e.stopPropagation(); 
-    
     const newSelectedIds = new Set(selectedTaskIds);
     const isAlreadySelected = newSelectedIds.has(taskId);
-
     if (isAlreadySelected) {
-      // 個別に選択解除
       newSelectedIds.delete(taskId);
-      // もし解除したのがアンカーなら、アンカーも解除
-      if (selectionAnchor === taskId) {
-        setSelectionAnchor(null);
-      }
+      if (selectionAnchor === taskId) setSelectionAnchor(null);
     } else if (selectionAnchor === null) {
-      // 1点目（アンカー）を選択
       newSelectedIds.add(taskId);
       setSelectionAnchor(taskId);
     } else {
-      // 2点目を選択（間を埋める）
       const startIndex = tasks.findIndex(t => t.id === selectionAnchor);
       const endIndex = tasks.findIndex(t => t.id === taskId);
-      
       if (startIndex !== -1 && endIndex !== -1) {
         const min = Math.min(startIndex, endIndex);
         const max = Math.max(startIndex, endIndex);
@@ -303,20 +319,18 @@ export default function HomePage() {
           newSelectedIds.add(tasks[i].id);
         }
       }
-      // アンカーをリセット
       setSelectionAnchor(null);
     }
-    
     setSelectedTaskIds(newSelectedIds);
   };
 
-  // 一斉解除 (既存)
+  // 一斉解除 (変更なし)
   const handleClearSelection = () => {
     setSelectedTaskIds(new Set());
     setSelectionAnchor(null);
   };
   
-  // --- 遅延ゼロ（自動保存） (変更なし) ---
+  // --- 遅延ゼロ自動保存 (変更なし) ---
   const saveMovedTasks = async () => {
     setIsBatchLoading(true);
     try {
@@ -324,9 +338,7 @@ export default function HomePage() {
         const original = originalTasks.find(ot => ot.id === task.id);
         return original && original.timeInMinutes !== task.timeInMinutes;
       });
-
       if (changedTasks.length > 0) {
-        // API (PUT) を使って1件ずつ保存
         await Promise.all(
           changedTasks.map(task => 
             fetch(`/api/tasks/${task.id}`, {
@@ -349,23 +361,18 @@ export default function HomePage() {
     }
   };
 
-  // PWA関連 (トグル10回ロジックを削除) (変更なし)
   const handleToggleEditMode = (newEditMode: boolean) => {
-    // 自動保存ロジック（変更なし）
     if (isEditMode && !newEditMode) {
-      if (movedTaskIds.size > 0) {
-        saveMovedTasks();
-      }
+      if (movedTaskIds.size > 0) saveMovedTasks();
       setSelectedTaskIds(new Set());
       setSelectionAnchor(null);
     }
     setIsEditMode(newEditMode);
   };
 
-  // --- 一括削除 (API呼び出し) (変更なし) ---
+  // --- 一括削除 (変更なし) ---
   const handleBatchDelete = async () => {
     if (selectedTaskIds.size === 0) return;
-
     setIsBatchLoading(true);
     const taskIds = Array.from(selectedTaskIds);
     try {
@@ -378,8 +385,6 @@ export default function HomePage() {
         await fetchTasks();
         setSelectedTaskIds(new Set());
         setSelectionAnchor(null);
-      } else {
-        console.error('一括削除に失敗しました', await response.json());
       }
     } catch (error) {
       console.error('一括削除中にエラー:', error);
@@ -388,28 +393,23 @@ export default function HomePage() {
     }
   };
 
-  // +1m / -1m ボタンの遅延ゼロロジック (既存)
+  // +1m / -1m (変更なし)
   const handleBatchOperation = (operation: 'move-up' | 'move-down') => {
     const deltaMinutes = operation === 'move-up' ? -1 : 1;
-
     setTasks(currentTasks => 
       currentTasks.map(task => {
         if (selectedTaskIds.has(task.id)) {
-          return { 
-            ...task, 
-            timeInMinutes: Math.max(0, task.timeInMinutes + deltaMinutes) 
-          };
+          return { ...task, timeInMinutes: Math.max(0, task.timeInMinutes + deltaMinutes) };
         }
         return task;
       })
     );
-    
     const newMovedIds = new Set(movedTaskIds);
     selectedTaskIds.forEach(id => newMovedIds.add(id));
     setMovedTaskIds(newMovedIds);
   };
   
-  // ドラッグ＆ドロップ (既存)
+  // ドラッグ＆ドロップ (変更なし)
   const handleDragStart = (e: DragEvent<HTMLDivElement>, task: Task) => {
     if (!selectedTaskIds.has(task.id)) {
       setSelectedTaskIds(new Set([task.id]));
@@ -421,57 +421,124 @@ export default function HomePage() {
     setDragStartMinutes(task.timeInMinutes);
     setDragStartTaskId(task.id);
   };
-
-  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+  const handleDragOverMain = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault(); 
+    if (dragStartTaskId === null) return;
     const deltaY = e.clientY - dragStartY;
     const deltaMinutes = Math.round(deltaY / pixelsPerMinute);
     const newGhostMinutes = dragStartMinutes + deltaMinutes;
     setDragGhostMinutes(newGhostMinutes);
   };
-
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     if (dragGhostMinutes === null || dragStartTaskId === null) return; 
-
     const dragStartTask = tasks.find(t => t.id === dragStartTaskId);
     const originalTimeOfDraggable = dragStartTask ? dragStartTask.timeInMinutes : dragStartMinutes;
-    
     let deltaMinutes = dragGhostMinutes - originalTimeOfDraggable;
     deltaMinutes = Math.max(-originalTimeOfDraggable, deltaMinutes); 
-
     setTasks(currentTasks => 
       currentTasks.map(task => {
         if (selectedTaskIds.has(task.id)) {
-          return { 
-            ...task, 
-            timeInMinutes: Math.max(0, task.timeInMinutes + deltaMinutes) 
-          };
+          return { ...task, timeInMinutes: Math.max(0, task.timeInMinutes + deltaMinutes) };
         }
         return task;
       })
     );
-    
     const newMovedIds = new Set(movedTaskIds);
     selectedTaskIds.forEach(id => newMovedIds.add(id));
     setMovedTaskIds(newMovedIds);
-    
     setDragGhostMinutes(null);
     setDragStartTaskId(null);
   };
-  
   const handleDragEnd = () => {
     setDragGhostMinutes(null);
     setDragStartTaskId(null);
   };
-  
 
-  // レンダリング (JSX) (変更なし)
+  // --- テンプレート機能のハンドラ (変更なし) ---
+  
+  // テンプレートを保存
+  const handleSaveTemplate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTemplateName || selectedTaskIds.size === 0) return;
+    const selectedTasks = tasks.filter(task => selectedTaskIds.has(task.id));
+    setIsBatchLoading(true);
+    try {
+      const response = await fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newTemplateName,
+          tasks: selectedTasks.map(t => ({ 
+            title: t.title,
+            timeInMinutes: t.timeInMinutes
+          })),
+        }),
+      });
+      if (response.ok) {
+        closeSaveTemplateModal();
+        handleClearSelection();
+        await fetchTemplates(); // テンプレートリストを更新
+      } else {
+        console.error('テンプレートの保存に失敗しました', await response.json());
+      }
+    } catch (error) {
+      console.error('テンプレートの保存中にエラー:', error);
+    } finally {
+      setIsBatchLoading(false);
+    }
+  };
+
+  // テンプレートを削除
+  const handleDeleteTemplate = async (templateId: string) => {
+    if (!window.confirm("このテンプレートを削除しますか？")) return;
+    try {
+      const response = await fetch(`/api/templates/${templateId}`, {
+        method: 'DELETE',
+      });
+      if (response.ok) {
+        await fetchTemplates(); // テンプレートリストを更新
+      } else {
+        console.error('テンプレートの削除に失敗しました', await response.json());
+      }
+    } catch (error) {
+      console.error('テンプレートの削除中にエラー:', error);
+    }
+  };
+
+  // テンプレートをタイムラインに適用（一括作成）
+  const handleApplyTemplate = async (templateId: string) => {
+    const startTimeInMinutes = timeToMinutes(modalTime); 
+    try {
+      const response = await fetch('/api/tasks/batch-create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          templateId: templateId,
+          startTimeInMinutes: startTimeInMinutes
+        }),
+      });
+      if (response.ok) {
+        const newTasks: Task[] = await response.json();
+        closeTemplateModal(); 
+        await fetchTasks();
+        const newSelectedIds = new Set(newTasks.map(task => task.id));
+        setSelectedTaskIds(newSelectedIds);
+        setIsEditMode(true); 
+      } else {
+        console.error('テンプレートの適用に失敗しました', await response.json());
+      }
+    } catch (error) {
+      console.error('テンプレートの適用中にエラー:', error);
+    }
+  };
+
+  // レンダリング (JSX)
   return (
     <>
-      {/* --- 1. 固定ヘッダー (トグルスイッチ) --- */}
+      {/* --- 1. 固定ヘッダー (トグルスイッチ) (変更なし) --- */}
       <div className="flex fixed top-4 left-1/2 -translate-x-1/2 z-50 items-center gap-2 p-2 bg-background rounded-full shadow-lg">
-        {/* PC用ズームボタン (変更なし) */}
+        {/* PC用ズームボタン */}
         <div className="hidden md:flex items-center gap-2">
           <button onClick={zoomOut} className="w-8 h-8 rounded-full hover:bg-muted">-</button>
           <span className="text-xs text-muted-foreground w-10 text-center">
@@ -481,7 +548,7 @@ export default function HomePage() {
           <div className="border-l h-6 mx-2 border-muted"></div>
         </div>
         
-        {/* トグルスイッチ (PWAインストールトリガー) */}
+        {/* トグルスイッチ */}
         <span className={`text-sm ml-2 transition-colors ${!isEditMode ? 'text-foreground font-semibold' : 'text-muted-foreground'}`}>通常</span>
         <button
           onClick={() => handleToggleEditMode(!isEditMode)}
@@ -495,10 +562,10 @@ export default function HomePage() {
       {/* --- 2. タイムライン本体 (JS同期スクロールコンテナ) (変更なし) --- */}
       <div className="absolute inset-0 flex flex-row pt-20">
         
-        {/* 2a. 左サイドバー (物差し) (変更なし) */}
+        {/* 2a. 左サイドバー (物差し) (★ 小さい目盛り修正 ★) */}
         <aside 
           ref={sidebarRef}
-          className="flex-shrink-0 border-muted h-full border-r overflow-y-auto w-20 md:w-24"
+          className="flex-shrink-0 border-muted h-full border-r overflow-y-auto w-20 md:w-24" // スマホ余白
           onScroll={() => handleScroll('sidebar')}
         >
           <div className="relative" style={{ height: `${TIMELINE_HEIGHT_PX}px` }}>
@@ -510,15 +577,19 @@ export default function HomePage() {
               return (
                 <div
                   key={index}
-                  className="absolute flex items-start w-full px-1 md:px-2 pt-1"
+                  className="absolute flex items-start w-full px-1 md:px-2" // pt-1 削除済み (時間ズレ修正)
                   style={{ top: `${currentMinutes * pixelsPerMinute}px` }}
                 >
-                  <div className={`flex items-center justify-start w-full ${isHalfHour ? '' : ''}`}>
-                    <span className="text-sm text-muted-foreground text-left w-12 md:w-14">
-                      {!isHalfHour && (
+                  {/* ★★★ 変更点: 小さい目盛りを描画する正しいロジック ★★★ */}
+                  <div className="flex items-center justify-start w-full">
+                    {/* 1. 時間ラベル (w-12 or w-14、flex-shrink-0 で縮まないようにする) */}
+                    <span className="text-sm text-muted-foreground text-left w-12 md:w-14 flex-shrink-0">
+                      {!isHalfHour && ( // 00分の時だけ時間を表示
                         hour >= 24 ? `(翌 ${(hour % 24).toString().padStart(2, "0")}:00)` : `${hour.toString().padStart(2, "0")}:00`
                       )}
                     </span>
+                    
+                    {/* 2. 目盛り (ml-1 or ml-2、w-2 or w-4) */}
                     <div className={`h-0.5 bg-muted-foreground ml-1 md:ml-2 ${isHalfHour ? 'w-2' : 'w-4'}`}></div>
                   </div>
                 </div>
@@ -530,18 +601,17 @@ export default function HomePage() {
         {/* 2b. メインコンテンツ (タスク) (変更なし) */}
         <main
           ref={mainContentRef}
-          className={`flex-1 overflow-y-auto relative transition-colors h-full pl-2 md:pl-4 ${isEditMode ? 'bg-muted/30' : ''}`}
+          className={`flex-1 overflow-y-auto relative transition-colors h-full pl-2 md:pl-4 ${isEditMode ? 'bg-muted/30' : ''}`} // スマホ余白
           onClick={handleBackgroundClick}
           onScroll={() => handleScroll('main')}
           style={{ cursor: isEditMode ? 'copy' : 'default' }}
-          onDragOver={handleDragOver}
+          onDragOver={handleDragOverMain} 
           onDrop={handleDrop}
           onDragEnd={handleDragEnd}
         >
           <div className="relative w-full" style={{ height: `${TIMELINE_HEIGHT_PX}px` }}>
             
-            {/* ★★★ 変更点 ★★★ */}
-            {/* 赤いバー (currentTime が null でない時だけ描画) */}
+            {/* 赤いバー (currentTime が null でない時だけ描画) (変更なし) */}
             {!isEditMode && currentTime && (
               <div 
                 className="absolute left-0 right-0 h-0.5 bg-primary z-10 pointer-events-none"
@@ -551,14 +621,14 @@ export default function HomePage() {
               </div>
             )}
 
-            {/* タスク一覧 (変更なし) */}
+            {/* タスク一覧 (余白詰め修正) (変更なし) */}
             {tasks.map((task) => {
               const isSelected = selectedTaskIds.has(task.id);
               return (
                 <div
                   key={task.id}
                   className={`task-item absolute flex items-center p-2 rounded z-20
-                             left-2 right-2 md:left-4 md:right-4 ${
+                             left-2 right-2 md:left-4 md:right-4 ${ // スマホ余白
                     isEditMode ? 'cursor-pointer hover:bg-muted' : ''
                   } ${
                     isEditMode && isSelected ? 'bg-primary/20' : ''
@@ -579,12 +649,13 @@ export default function HomePage() {
                   {isEditMode && (
                     <input
                       type="checkbox"
-                      className="block h-4 w-4 mr-1 md:mr-3 cursor-pointer"
+                      className="block h-4 w-4 mr-1 md:mr-3 cursor-pointer" // スマホ余白
                       checked={isSelected}
                       onClick={(e) => handleCheckboxClick(e, task.id)}
                       readOnly 
                     />
                   )}
+                  {/* ★ 余白削除済み (w- と text-right を削除) */}
                   <span className="font-mono text-foreground md:text-muted-foreground mr-2 md:mr-4">
                     {formatTime(task.timeInMinutes)}
                   </span>
@@ -593,7 +664,7 @@ export default function HomePage() {
               );
             })}
             
-            {/* ドラッグ中のゴースト表示 (変更なし) */}
+            {/* ドラッグ中のゴースト表示 (余白詰め修正) (変更なし) */}
             {dragGhostMinutes !== null && (
               <div 
                 className="absolute left-0 right-0 z-30 pointer-events-none"
@@ -613,12 +684,13 @@ export default function HomePage() {
                         key={task.id}
                         className="task-item-ghost absolute flex items-center p-2 rounded z-20
                                    opacity-50 bg-primary/30 border border-primary
-                                   left-2 right-2 md:left-4 md:right-4"
+                                   left-2 right-2 md:left-4 md:right-4" // スマホ余白
                         style={{ top: `${ghostTopPx}px` }}
                       >
                         {isEditMode && (
-                          <div className="h-4 w-4 mr-1 md:mr-3" />
+                          <div className="h-4 w-4 mr-1 md:mr-3" /> // スマホ余白
                         )}
+                        {/* ★ 余白削除済み (w- と text-right を削除) */}
                         <span className="font-mono text-foreground md:text-muted-foreground mr-2 md:mr-4">
                           {formatTime(ghostTaskTime)}
                         </span>
@@ -666,7 +738,6 @@ export default function HomePage() {
                      flex items-center justify-center"
           title="アプリをインストール"
         >
-          {/* SVGアイコン (例: ダウンロード) */}
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-7 h-7">
             <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
           </svg>
@@ -674,13 +745,13 @@ export default function HomePage() {
       )}
 
 
-      {/* --- 5. 一括操作パネル (一斉解除) (変更なし) --- */}
+      {/* ★★★ 5. 一括操作パネル (変更なし) ★★★ */}
       {isEditMode && selectedTaskIds.size > 0 && (
         <div 
           className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 
                      flex items-center gap-2 p-3 bg-background rounded-full shadow-lg"
         >
-          {/* 一斉解除ボタン */}
+          {/* 一斉解除ボタン (変更なし) */}
           <button
             onClick={handleClearSelection}
             className="text-sm text-primary font-semibold ml-2 px-3 py-1 rounded-full hover:bg-muted transition-colors"
@@ -691,7 +762,7 @@ export default function HomePage() {
           
           <div className="border-l h-6 mx-2 border-muted"></div>
           
-          {/* +1m / -1m ボタン */}
+          {/* +1m / -1m ボタン (変更なし) */}
           <button
             onClick={() => handleBatchOperation('move-down')} // 遅延ゼロ
             className="w-12 h-10 rounded-full hover:bg-muted disabled:opacity-50"
@@ -717,11 +788,23 @@ export default function HomePage() {
           >
             削除
           </button>
+          
+          {/* ★ 「テンプレートとして保存」ボタン (変更なし) ★ */}
+          <div className="border-l h-6 mx-2 border-muted"></div>
+          <button
+            onClick={openSaveTemplateModal}
+            className="w-16 h-10 rounded-full text-primary hover:bg-primary/20 disabled:opacity-50"
+            disabled={isBatchLoading}
+            title="選択中のタスクをテンプレートとして保存"
+          >
+            保存
+          </button>
+          
         </div>
       )}
 
 
-      {/* --- 6. モーダル (固定) (変更なし) --- */}
+      {/* ★★★ 6. タスク追加/編集モーダル (変更なし) ★★★ */}
       <div
         className={`fixed inset-0 flex items-center justify-center z-50 transition-opacity duration-300 ${
           isModalOpen ? "opacity-100" : "opacity-0 pointer-events-none"
@@ -735,9 +818,30 @@ export default function HomePage() {
           }`}
           onClick={(e) => e.stopPropagation()} 
         >
-          <h2 className="text-xl font-semibold mb-6 text-center">
+          <h2 className="text-xl font-semibold mb-4 text-center">
             {selectedTask ? "タスクの編集" : "新規タスクの追加"}
           </h2>
+          
+          {/* ★ 「休憩」ボタン と 「テンプレート」ボタン (変更なし) ★ */}
+          {!selectedTask && ( // 新規追加の時だけ表示
+            <div className="mb-4 flex justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => setModalTitle("休憩")}
+                className="py-2 px-4 rounded-full bg-muted text-muted-foreground hover:bg-muted/80 transition-colors text-sm"
+              >
+                ☕ 休憩
+              </button>
+              <button
+                type="button"
+                onClick={openTemplateModal}
+                className="py-2 px-4 rounded-full bg-muted text-muted-foreground hover:bg-muted/80 transition-colors text-sm"
+              >
+                📂 テンプレート...
+              </button>
+            </div>
+          )}
+
           {/* 時間入力 (変更なし) */}
           <div className="mb-6 time-select-wrapper">
             <select
@@ -802,6 +906,122 @@ export default function HomePage() {
                 完了
               </button>
             </div>
+          </div>
+        </form>
+      </div>
+      
+      {/* ★★★ 7. テンプレート管理モーダル (新規) (変更なし) ★★★ */}
+      <div
+        className={`fixed inset-0 flex items-center justify-center z-50 transition-opacity duration-300 ${
+          isTemplateModalOpen ? "opacity-100" : "opacity-0 pointer-events-none"
+        }`}
+      >
+        <div className="absolute inset-0 bg-black/60" onClick={closeTemplateModal} />
+        <div
+          className={`bg-background w-full max-w-md rounded-lg shadow-lg p-6 z-50 transition-all duration-300 ${
+            isTemplateModalOpen ? 'scale-100 opacity-100' : 'scale-90 opacity-0'
+          }`}
+        >
+          <h2 className="text-xl font-semibold mb-6 text-center">
+            テンプレートからタスクを追加
+          </h2>
+          <p className="text-sm text-muted-foreground text-center mb-6 -mt-4">
+            （{formatTime(timeToMinutes(modalTime))} から開始）
+          </p>
+          
+          {/* ピクセルアート風ボタンのコンテナ (ご要望) */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 max-h-64 overflow-y-auto pr-2">
+            {templates.length === 0 && (
+              <p className="text-muted-foreground col-span-full text-center">保存されたテンプレートがありません。</p>
+            )}
+            
+            {templates.map(template => (
+              <div key={template.id} className="relative group">
+                {/* テンプレート適用ボタン */}
+                <button
+                  type="button"
+                  onClick={() => handleApplyTemplate(template.id)}
+                  className="w-full h-24 p-2 bg-muted rounded-lg text-foreground hover:bg-muted/80 transition-colors
+                             flex flex-col items-center justify-center text-center overflow-hidden"
+                  title={`"${template.name}" を ${formatTime(timeToMinutes(modalTime))} から挿入します`}
+                >
+                  <span className="text-lg font-semibold">{template.name}</span>
+                  <span className="text-xs text-muted-foreground">{template.tasks.length}件のタスク</span>
+                </button>
+                
+                {/* テンプレート削除ボタン */}
+                <button
+                  type="button"
+                  onClick={() => handleDeleteTemplate(template.id)}
+                  className="absolute -top-2 -right-2 w-7 h-7 rounded-full bg-background border border-muted-foreground/50 text-muted-foreground
+                             hover:bg-primary hover:text-primary-foreground opacity-50 group-hover:opacity-100 transition-opacity"
+                  title="このテンプレートを削除"
+                >
+                  &times;
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-end mt-6">
+            <button
+              type="button"
+              onClick={closeTemplateModal}
+              className="py-2 px-5 rounded bg-muted text-foreground"
+            >
+              閉じる
+            </button>
+          </div>
+        </div>
+      </div>
+      
+      {/* ★★★ 8. テンプレート保存モーダル (新規) (変更なし) ★★★ */}
+      <div
+        className={`fixed inset-0 flex items-center justify-center z-50 transition-opacity duration-300 ${
+          isSaveTemplateModalOpen ? "opacity-100" : "opacity-0 pointer-events-none"
+        }`}
+      >
+        <div className="absolute inset-0 bg-black/60" onClick={closeSaveTemplateModal} />
+        <form
+          onSubmit={handleSaveTemplate}
+          className={`bg-background w-full max-w-sm rounded-lg shadow-lg p-6 z-50 transition-all duration-300 ${
+            isSaveTemplateModalOpen ? 'scale-100 opacity-100' : 'scale-90 opacity-0'
+          }`}
+          onClick={(e) => e.stopPropagation()} 
+        >
+          <h2 className="text-xl font-semibold mb-6 text-center">
+            テンプレートとして保存
+          </h2>
+          <p className="text-sm text-muted-foreground text-center mb-6 -mt-4">
+            （{selectedTaskIds.size}件のタスク）
+          </p>
+          
+          <div className="mb-6">
+            <input
+              type="text"
+              placeholder="テンプレート名を入力 (例: 朝のルーティン)"
+              value={newTemplateName}
+              onChange={(e) => setNewTemplateName(e.target.value)}
+              className="w-full p-3 rounded bg-muted text-foreground text-lg text-center"
+              required
+            />
+          </div>
+          
+          <div className="flex justify-end gap-3">
+            <button
+              type="button"
+              onClick={closeSaveTemplateModal}
+              className="py-2 px-5 rounded bg-muted text-foreground"
+            >
+              キャンセル
+            </button>
+            <button
+              type="submit"
+              className="py-2 px-5 rounded bg-primary text-primary-foreground"
+              disabled={isBatchLoading}
+            >
+              {isBatchLoading ? "保存中..." : "保存"}
+            </button>
           </div>
         </form>
       </div>
