@@ -36,14 +36,15 @@ export default function HomePage() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [modalTitle, setModalTitle] = useState("");
   const [modalTime, setModalTime] = useState<ModalTime>({ hour: 0, minute: 0 });
-  const [currentTime, setCurrentTime] = useState(new Date());
   const [pixelsPerMinute, setPixelsPerMinute] = useState(2); 
+
+  // ★★★ 変更点 ★★★
+  // 初期描画時のズレをなくすため、初期値を null に設定
+  const [currentTime, setCurrentTime] = useState<Date | null>(null);
 
   // --- 範囲選択 (既存) ---
   const [selectedTaskIds, setSelectedTaskIds] = useState(new Set<string>());
   const [isBatchLoading, setIsBatchLoading] = useState(false);
-  
-  // 2点クリック範囲選択 (既存)
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null);
   
   // --- 遅延ゼロ（自動保存） (既存) ---
@@ -58,7 +59,6 @@ export default function HomePage() {
   
   // ★ PWA関連 (変更なし) ★
   const [deferredPrompt, setDeferredPrompt] = useState<Event | null>(null);
-  // toggleCount と lastToggleTime は削除済み
 
   // --- Ref (変更なし) ---
   const mainContentRef = useRef<HTMLDivElement>(null);
@@ -87,19 +87,25 @@ export default function HomePage() {
     }
   }, []); 
 
-  // --- useEffect (マウント時) (PWA関連の追加) ---
+  // ★★★ 変更点 ★★★
+  // --- useEffect (マウント時) (クライアント時刻で同期) ---
   useEffect(() => {
     fetchTasks();
-    const now = new Date();
-    const currentMinute = now.getHours() * 60 + now.getMinutes();
     
+    // クライアント（ブラウザ）の現在時刻を「今」取得する
+    const now = new Date();
+    // ★ 赤いバーの State をクライアント時刻で更新
+    setCurrentTime(now); 
+    
+    const currentMinute = now.getHours() * 60 + now.getMinutes();
     const scrollPosition = currentMinute * pixelsPerMinute;
     const centerOffset = (window.innerHeight / 2);
 
     if (mainContentRef.current) mainContentRef.current.scrollTop = scrollPosition - centerOffset;
     if (sidebarRef.current) sidebarRef.current.scrollTop = scrollPosition - centerOffset;
     
-    const timer = setInterval(() => setCurrentTime(new Date()), 60000);
+    // ★ 更新間隔を 60秒 -> 10秒 に変更
+    const timer = setInterval(() => setCurrentTime(new Date()), 10000); // 10秒ごと
 
     // ★ PWAインストールプロンプトのイベントリスナー (変更なし) ★
     const handleBeforeInstallPrompt = (e: Event) => {
@@ -114,7 +120,7 @@ export default function HomePage() {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchTasks]); 
+  }, [fetchTasks]); // pixelsPerMinute は意図的に除外（起動時のみ実行）
 
   // --- 時間変換ユーティリティ (変更なし) ---
   const minutesToTime = (minutes: number): ModalTime => ({
@@ -222,12 +228,9 @@ export default function HomePage() {
     }
   };
 
-  // ★★★ 変更点 ★★★
-  // --- ズーム機能 (PWAインストールトリガーを削除) ---
+  // --- ズーム機能 (PWAインストールトリガーを削除) (変更なし) ---
   const handleZoom = (newPixelsPerMinute: number) => {
     if (!mainContentRef.current) return;
-
-    // ★ PWAトリガーのロジックをここから削除 ★
     
     // --- 通常のズームロジック（変更なし） ---
     const mainRect = mainContentRef.current.getBoundingClientRect();
@@ -246,11 +249,9 @@ export default function HomePage() {
 
   // zoomIn / zoomOut は handleZoom を呼ぶだけ (変更なし)
   const zoomIn = () => handleZoom(Math.min(pixelsPerMinute * 1.5, 20));
-  // ズームアウトの最小値を MIN_ZOOM_THRESHOLD に設定
   const zoomOut = () => handleZoom(Math.max(pixelsPerMinute / 1.5, MIN_ZOOM_THRESHOLD));
 
-  // ★★★ 変更点 ★★★
-  // --- PWAインストールボタン用クリックハンドラ ---
+  // --- PWAインストールボタン用クリックハンドラ (変更なし) ---
   const handleInstallClick = () => {
     if (deferredPrompt) {
       (deferredPrompt as any).prompt(); // プロンプト表示
@@ -265,8 +266,11 @@ export default function HomePage() {
     }
   };
 
-  // --- 赤いバー用の計算 (変更なし) ---
-  const currentMinute = currentTime.getHours() * 60 + currentTime.getMinutes();
+  // ★★★ 変更点 ★★★
+  // --- 赤いバー用の計算 (currentTime が null の場合を考慮) ---
+  const currentMinute = currentTime 
+    ? currentTime.getHours() * 60 + currentTime.getMinutes() 
+    : 0;
   const currentTimeTopPx = currentMinute * pixelsPerMinute;
 
   // 2点クリック範囲選択 (既存)
@@ -535,8 +539,10 @@ export default function HomePage() {
           onDragEnd={handleDragEnd}
         >
           <div className="relative w-full" style={{ height: `${TIMELINE_HEIGHT_PX}px` }}>
-            {/* 赤いバー (変更なし) */}
-            {!isEditMode && (
+            
+            {/* ★★★ 変更点 ★★★ */}
+            {/* 赤いバー (currentTime が null でない時だけ描画) */}
+            {!isEditMode && currentTime && (
               <div 
                 className="absolute left-0 right-0 h-0.5 bg-primary z-10 pointer-events-none"
                 style={{ top: `${currentTimeTopPx}px` }}
@@ -648,11 +654,7 @@ export default function HomePage() {
       </div>
 
       
-      {/* ★★★ 変更点 ★★★ */}
-      {/* --- 4. PWAインストールボタン (ズームアウトで表示) --- */}
-      {/* deferredPrompt (インストール可能) で、
-        かつ pixelsPerMinute (ズームレベル) が最小値以下の時だけ表示
-      */}
+      {/* --- 4. PWAインストールボタン (ズームアウトで表示) (変更なし) --- */}
       {deferredPrompt && pixelsPerMinute <= MIN_ZOOM_THRESHOLD && (
         <button
           onClick={handleInstallClick}
@@ -672,7 +674,7 @@ export default function HomePage() {
       )}
 
 
-      {/* --- 5. 一括操作パネル (一斉解除) --- */}
+      {/* --- 5. 一括操作パネル (一斉解除) (変更なし) --- */}
       {isEditMode && selectedTaskIds.size > 0 && (
         <div 
           className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 
