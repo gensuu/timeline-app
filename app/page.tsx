@@ -23,7 +23,7 @@ type ModalTime = { hour: number; minute: number };
 const TOTAL_HOURS = 31; // 翌朝7時までの31時間
 const MINUTES_PER_HOUR = 60;
 const TOTAL_MINUTES = TOTAL_HOURS * MINUTES_PER_HOUR;
-const PWA_TOGGLE_TIMEOUT = 3000; // 3秒 (3000ミリ秒)
+const MIN_ZOOM_THRESHOLD = 0.3; // PWAプロンプトを表示するズームのしきい値
 
 /**
  * 24hタイムライン アプリケーションのメインページ
@@ -58,8 +58,8 @@ export default function HomePage() {
   
   // ★ PWA関連 (変更なし) ★
   const [deferredPrompt, setDeferredPrompt] = useState<Event | null>(null);
-  const [toggleCount, setToggleCount] = useState(0);
-  const [lastToggleTime, setLastToggleTime] = useState<number>(0); 
+  // ★★★ 変更点 ★★★
+  // toggleCount と lastToggleTime の useState を削除
 
   // --- Ref (変更なし) ---
   const mainContentRef = useRef<HTMLDivElement>(null);
@@ -223,22 +223,48 @@ export default function HomePage() {
     }
   };
 
-  // --- ズーム機能 (変更なし) ---
+  // ★★★ 変更点 ★★★
+  // --- ズーム機能 (PWAインストールトリガーを統合) ---
   const handleZoom = (newPixelsPerMinute: number) => {
     if (!mainContentRef.current) return;
+
+    // ★ PWAトリガー ★
+    // もし、ズームアウトしようとして（new < old）、
+    // 新しいズームレベルが最小値（MIN_ZOOM_THRESHOLD）以下に達し、
+    // かつ、インストールプロンプト（deferredPrompt）が存在する場合
+    if (newPixelsPerMinute < pixelsPerMinute && newPixelsPerMinute <= MIN_ZOOM_THRESHOLD && deferredPrompt) {
+      console.log('Attempting to show PWA install prompt via zoom out');
+      (deferredPrompt as any).prompt(); // プロンプト表示
+      (deferredPrompt as any).userChoice.then((choiceResult: any) => {
+        if (choiceResult.outcome === 'accepted') {
+          console.log('User accepted the PWA install prompt');
+        } else {
+          console.log('User dismissed the PWA install prompt');
+        }
+        setDeferredPrompt(null); // プロンプトは一度しか使えないのでクリア
+      });
+      // プロンプトを表示した場合、ズームアウトは実行しない（誤操作防止）
+      return; 
+    }
+    
+    // --- 通常のズームロジック（変更なし） ---
     const mainRect = mainContentRef.current.getBoundingClientRect();
     const centerViewportY = mainRect.top + mainRect.height / 2;
     const centerAbsoluteY = mainContentRef.current.scrollTop + (centerViewportY - mainRect.top);
     const centerMinute = centerAbsoluteY / pixelsPerMinute;
-    setPixelsPerMinute(newPixelsPerMinute);
+    
+    setPixelsPerMinute(newPixelsPerMinute); // Stateを更新
+    
     const newScrollTop = (centerMinute * newPixelsPerMinute) - (mainRect.height / 2);
     requestAnimationFrame(() => {
       if (mainContentRef.current) mainContentRef.current.scrollTop = newScrollTop;
       if (sidebarRef.current) sidebarRef.current.scrollTop = newScrollTop;
     });
   };
+
+  // zoomIn / zoomOut は handleZoom を呼ぶだけ (変更なし)
   const zoomIn = () => handleZoom(Math.min(pixelsPerMinute * 1.5, 20));
-  const zoomOut = () => handleZoom(Math.max(pixelsPerMinute / 1.5, 0.5));
+  const zoomOut = () => handleZoom(Math.max(pixelsPerMinute / 1.5, 0.2));
 
   // --- 赤いバー用の計算 (変更なし) ---
   const currentMinute = currentTime.getHours() * 60 + currentTime.getMinutes();
@@ -320,8 +346,10 @@ export default function HomePage() {
     }
   };
 
-  // PWA関連 (タイムアウト付きカウンター) (変更なし)
+  // ★★★ 変更点 ★★★
+  // PWA関連 (トグル10回ロジックを削除)
   const handleToggleEditMode = (newEditMode: boolean) => {
+    // 自動保存ロジック（変更なし）
     if (isEditMode && !newEditMode) {
       if (movedTaskIds.size > 0) {
         saveMovedTasks();
@@ -330,32 +358,8 @@ export default function HomePage() {
       setSelectionAnchor(null);
     }
     setIsEditMode(newEditMode);
-
-    if (deferredPrompt) {
-      const now = Date.now();
-      let newCount = 1;
-      if (now - lastToggleTime < PWA_TOGGLE_TIMEOUT) {
-        newCount = toggleCount + 1;
-      }
-      setToggleCount(newCount);
-      setLastToggleTime(now); 
-
-      if (newCount >= 10) {
-        console.log('Attempting to show PWA install prompt');
-        (deferredPrompt as any).prompt(); 
-        (deferredPrompt as any).userChoice.then((choiceResult: any) => {
-          if (choiceResult.outcome === 'accepted') {
-            console.log('User accepted the PWA install prompt');
-          } else {
-            console.log('User dismissed the PWA install prompt');
-          }
-          setDeferredPrompt(null); 
-        });
-        setToggleCount(0); 
-      }
-    } else if (toggleCount !== 0) {
-      setToggleCount(0); 
-    }
+    
+    // ★ PWA関連のトグルカウントロジックを「全て削除」 ★
   };
 
   // --- 一括削除 (API呼び出し) (変更なし) ---
@@ -655,8 +659,6 @@ export default function HomePage() {
                      flex items-center gap-2 p-3 bg-background rounded-full shadow-lg"
         >
           {/* 一斉解除ボタン */}
-          {/* ★★★ 変更点 ★★★ */}
-          {/* 'T' というタイポを削除しました */}
           <button
             onClick={handleClearSelection}
             className="text-sm text-primary font-semibold ml-2 px-3 py-1 rounded-full hover:bg-muted transition-colors"
