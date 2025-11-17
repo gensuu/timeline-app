@@ -1,0 +1,29 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// 1. Prismaクライアントの生成設定
+generator client {
+  provider = "prisma-client-js"
+}
+
+// 2. データベースの接続設定
+datasource db {
+  provider     = "postgresql" // NeonはPostgreSQLです
+  url          = env("DATABASE_URL") // .envファイルのDATABASE_URLを参照します
+  relationMode = "prisma"
+}
+
+// 3. アプリケーションのデータモデル定義
+model Task {
+  id            String   @id @default(cuid()) // タスク固有のID（自動生成）
+  title         String   // タスク名 (例: "顔を洗う")
+  
+  // 時間を「分」で管理します (例: 8:03 -> 483)
+  // 理由: 時間順の並び替え、+-1分の移動計算が簡単なため
+  timeInMinutes Int      
+
+  createdAt     DateTime @default(now()) // 作成日時
+  updatedAt     DateTime @updatedAt // 更新日時
+
+  @@index([timeInMinutes]) // timeInMinutesでの検索を高速化
+}

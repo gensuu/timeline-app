@@ -1,0 +1,48 @@
+/* 1. Tailwind CSSの基本設定を読み込み (最重要) */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /*
+   * ★★★ :root { ... } のブロック全体が「削除」されていることを確認 ★★★
+   */
+
+  /* body への基本設定 */
+  body {
+    background-color: hsl(220 10% 15%); /* 値を直接指定 */
+    color: hsl(210 10% 80%);      /* 値を直接指定 */
+  }
+
+  /* 時間入力 <select> のスタイルをリセット */
+  select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-color: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font-family: inherit;
+    font-size: inherit;
+    cursor: inherit;
+    line-height: inherit;
+    outline: none;
+  }
+}
+
+/* 3. コンポーネントスタイル */
+@layer components {
+  /* 時間入力（ドラムロール風）のラッパー */
+  .time-select-wrapper {
+    @apply bg-muted rounded-md p-3 flex items-center justify-center text-2xl font-mono;
+  }
+  /* 時間入力の <select> 自体 */
+  .time-select {
+    @apply bg-transparent text-foreground text-center focus:outline-none;
+  }
+  /* 時間入力の「h」「m」のセパネータ */
+  .time-separator {
+    @apply text-muted-foreground mx-1 text-xl;
+  }
+}

@@ -1,0 +1,33 @@
+# 依存関係（自動生成）
+/node_modules
+
+# ビルドキャッシュ（自動生成）
+/.next/
+
+# Next.js の静的エクスポート
+/out/
+
+# 環境変数（秘密のファイル）
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# npm のデバッグログ
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+
+---
+
+### 6-2. GitHub への初回アップロード
+
+`.gitignore` ファイルを保存したら、あなたのPC（ローカル）の `timeline-app` フォルダを GitHub にアップロードします。
+
+（もし Git や GitHub の使い方が分からない、または GitHub リポジトリをまだ作成していない場合は、遠慮なくお申し付けください。`git init` からの手順を詳しく説明します！）
+
+GitHub へのアップロードが完了したら、次のステップ（Render でのプロジェクト作成）に進みます。
+
+**GitHub へのアップロードは完了していますか？ それとも、`git init` からの手順が必要ですか？**
