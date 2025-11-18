@@ -1,6 +1,5 @@
 "use client";
 
-// useState, useEffect, useRef, useMemo, ChangeEvent, useCallback, DragEvent をインポート
 import { 
   useState, 
   useEffect, 
@@ -8,16 +7,16 @@ import {
   useMemo, 
   ChangeEvent, 
   useCallback, 
-  DragEvent 
+  DragEvent,
+  useLayoutEffect 
 } from "react";
 
-// --- 型定義 (テンプレート機能を追加) ---
+// --- 型定義 ---
 interface Task {
   id: string;
   title: string;
   timeInMinutes: number;
 }
-// テンプレート（と、それに含まれるタスク）の型
 interface TemplateTask {
   id: string;
   title: string;
@@ -34,9 +33,142 @@ type ModalTime = { hour: number; minute: number };
 const TOTAL_HOURS = 31; // 翌朝7時までの31時間
 const MINUTES_PER_HOUR = 60;
 const TOTAL_MINUTES = TOTAL_HOURS * MINUTES_PER_HOUR;
-const MIN_ZOOM_THRESHOLD = 0.3; // PWAインストールボタンを表示するズームのしきい値
-const LONG_PRESS_DURATION = 500; // 長押し判定の時間 (500ms)
-const HEADER_PADDING_TOP_PX = 80; // pt-20 (5rem * 16px) の固定値
+const MIN_ZOOM_THRESHOLD = 0.3; 
+const LONG_PRESS_DURATION = 500; 
+const HEADER_PADDING_TOP_PX = 80;
+
+// --- TimePickerWheel コンポーネント ---
+// ★ 重要: CSSの height: 48px と完全に一致させる
+const ITEM_HEIGHT_PX = 48; 
+
+interface TimePickerWheelProps {
+  items: number[]; 
+  value: number;   
+  onChange: (newValue: number) => void; 
+  unit: 'h' | 'm'; 
+  formatLabel: (value: number) => string; 
+}
+
+const TimePickerWheel: React.FC<TimePickerWheelProps> = ({ 
+  items, 
+  value, 
+  onChange, 
+  unit, 
+  formatLabel 
+}) => {
+  const scrollRef = useRef<HTMLUListElement>(null);
+  const scrollTimer = useRef<NodeJS.Timeout | null>(null);
+  
+  // 初期表示・外部更新時の位置合わせ
+  useLayoutEffect(() => {
+    const wheel = scrollRef.current;
+    if (wheel) {
+      const index = items.indexOf(value);
+      if (index !== -1) {
+        // 完全に一致していない場合のみスクロール（微調整ループ防止）
+        const targetTop = index * ITEM_HEIGHT_PX;
+        if (Math.abs(wheel.scrollTop - targetTop) > 1) {
+           wheel.scrollTo({ top: targetTop, behavior: 'auto' });
+        }
+      }
+    }
+  }, [value, items]);
+
+  // PCのマウスホイール操作の最適化
+  useEffect(() => {
+    const wheel = scrollRef.current;
+    if (!wheel) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+
+      // 現在のスクロール位置からインデックスを計算
+      const currentScroll = wheel.scrollTop;
+      const currentIndex = Math.round(currentScroll / ITEM_HEIGHT_PX);
+      
+      // ホイールの方向 (正: 下へ=進む, 負: 上へ=戻る)
+      const direction = Math.sign(e.deltaY);
+      
+      let nextIndex = currentIndex + direction;
+      
+      // 範囲制限
+      nextIndex = Math.min(Math.max(0, nextIndex), items.length - 1);
+      
+      // スムーズに1項目分だけ移動
+      wheel.scrollTo({
+        top: nextIndex * ITEM_HEIGHT_PX,
+        behavior: 'smooth'
+      });
+    };
+
+    wheel.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      wheel.removeEventListener('wheel', handleWheel);
+    };
+  }, [items.length]);
+
+  // スクロール終了時のスナップ位置補正と値の確定
+  const handleScroll = () => {
+    const wheel = scrollRef.current;
+    if (!wheel) return;
+
+    if (scrollTimer.current) {
+      clearTimeout(scrollTimer.current);
+    }
+
+    // スクロールが止まってから処理 (100ms後)
+    scrollTimer.current = setTimeout(() => {
+      const scrollTop = wheel.scrollTop;
+      // 丸めでインデックスを決定 (0.5以上なら次の数字へ)
+      const index = Math.round(scrollTop / ITEM_HEIGHT_PX);
+      
+      const clampedIndex = Math.min(Math.max(0, index), items.length - 1);
+      const newValue = items[clampedIndex];
+
+      // 値が変更されていれば通知
+      if (newValue !== value) {
+        onChange(newValue); 
+      }
+      
+      // 視覚的にも中心にピタッと合わせる
+      const targetTop = clampedIndex * ITEM_HEIGHT_PX;
+      if (Math.abs(scrollTop - targetTop) > 1) {
+        wheel.scrollTo({ top: targetTop, behavior: 'smooth' });
+      }
+
+    }, 100); 
+  };
+
+  return (
+    <>
+      <ul
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="time-wheel"
+      >
+        {items.map((item) => {
+          const isSnapped = item === value;
+          return (
+            <li
+              key={item}
+              className={`time-wheel-item ${
+                isSnapped ? "time-wheel-item-snapped" : ""
+              }`}
+              // クリックでも選択できるようにする
+              onClick={() => {
+                onChange(item);
+              }}
+            >
+              {formatLabel(item)}
+            </li>
+          );
+        })}
+      </ul>
+      <span className="time-wheel-unit-label">{unit}</span>
+    </>
+  );
+};
+
 
 /**
  * 24hタイムライン アプリケーションのメインページ
@@ -48,78 +180,60 @@ export default function HomePage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [modalTitle, setModalTitle] = useState("");
-  const [modalTime, setModalTime] = useState<ModalTime>({ hour: 0, minute: 0 });
+  const [modalTime, setModalTime] = useState<ModalTime>({ hour: 0, minute: 0 }); 
   const [pixelsPerMinute, setPixelsPerMinute] = useState(2); 
   const [currentTime, setCurrentTime] = useState<Date | null>(null); 
-
-  // --- 範囲選択 (既存) ---
   const [selectedTaskIds, setSelectedTaskIds] = useState(new Set<string>());
   const [isBatchLoading, setIsBatchLoading] = useState(false);
   const [selectionAnchor, setSelectionAnchor] = useState<string | null>(null);
-  
-  // --- 遅延ゼロ（自動保存） (既存) ---
   const [originalTasks, setOriginalTasks] = useState<Task[]>([]);
   const [movedTaskIds, setMovedTaskIds] = useState(new Set<string>());
-
-  // ドラッグ＆ドロップ (既存)
-  const [dragStartY, setDragStartY] = useState(0); // ★ ズレ修正: これは main 要素の相対Y座標
+  const [dragStartY, setDragStartY] = useState(0); 
   const [dragStartMinutes, setDragStartMinutes] = useState(0);
   const [dragGhostMinutes, setDragGhostMinutes] = useState<number | null>(null);
   const [dragStartTaskId, setDragStartTaskId] = useState<string | null>(null);
-  
-  // ★ PWA関連 (変更なし) ★
   const [deferredPrompt, setDeferredPrompt] = useState<Event | null>(null);
-  
-  // ★★★ テンプレート機能用の State (変更なし) ★★★
   const [templates, setTemplates] = useState<Template[]>([]);
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [isSaveTemplateModalOpen, setIsSaveTemplateModalOpen] = useState(false);
   const [newTemplateName, setNewTemplateName] = useState("");
   
-  // --- Ref (変更なし) ---
+  // --- Ref ---
   const mainContentRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLDivElement>(null); 
   const isSyncingScroll = useRef(false); 
-
-  // ★★★ 長押し機能用の Ref (変更なし) ★★★
   const longPressTimer = useRef<NodeJS.Timeout | null>(null);
-  const isLongPressed = useRef(false); // 長押しが成功したかを判定するフラグ
+  const isLongPressed = useRef(false); 
 
-  // --- 動的な高さ計算 (変更なし) ---
+  // --- 動的な高さ計算 ---
   const { TIMELINE_HEIGHT_PX, HOUR_HEIGHT_PX } = useMemo(() => {
     const HOUR_HEIGHT_PX = MINUTES_PER_HOUR * pixelsPerMinute;
     const TIMELINE_HEIGHT_PX = TOTAL_HOURS * HOUR_HEIGHT_PX;
     return { TIMELINE_HEIGHT_PX, HOUR_HEIGHT_PX };
   }, [pixelsPerMinute]);
 
+  const hourPickerItems = useMemo(() => Array.from({ length: TOTAL_HOURS }, (_, i) => i), []); 
+  const minutePickerItems = useMemo(() => Array.from({ length: 60 }, (_, i) => i), []); 
 
-  // ★★★ 現在時刻へジャンプする関数 (★★★ ズレ修正 ★★★) ★★★
+  // 現在時刻へジャンプ
   const scrollToCurrentTime = (behavior: 'smooth' | 'auto' = 'smooth') => {
     if (!mainContentRef.current || !sidebarRef.current) return;
-
-    // 現在時刻を強制的に最新に更新
     const now = new Date();
     setCurrentTime(now); 
-
     const currentMinute = now.getHours() * 60 + now.getMinutes();
-    // ★ ズレ修正: pt-20 (80px) の余白を考慮
     const scrollPosition = (currentMinute * pixelsPerMinute); 
-    const centerOffset = (window.innerHeight / 2) - (HEADER_PADDING_TOP_PX / 2); // 画面中央に
-
-    // スムーズスクロールを適用
+    const centerOffset = (window.innerHeight / 2) - (HEADER_PADDING_TOP_PX / 2); 
     mainContentRef.current.scrollTo({
       top: scrollPosition - centerOffset,
       behavior: behavior,
     });
-    // サイドバーも（JS同期が間に合わない場合を考慮し）直接スクロール
     sidebarRef.current.scrollTo({
       top: scrollPosition - centerOffset,
       behavior: behavior,
     });
   };
 
-
-  // --- データ取得 (変更なし) ---
+  // --- データ取得 ---
   const fetchTasks = useCallback(async () => {
     try {
       const response = await fetch("/api/tasks");
@@ -134,7 +248,6 @@ export default function HomePage() {
     }
   }, []); 
 
-  // ★ テンプレート取得 (変更なし) ★
   const fetchTemplates = useCallback(async () => {
     try {
       const response = await fetch("/api/templates");
@@ -146,80 +259,60 @@ export default function HomePage() {
     }
   }, []);
 
-  // --- useEffect (マウント時) (★★★ ズレ修正 ★★★) ---
+  // --- useEffect (マウント時) ---
   useEffect(() => {
     fetchTasks();
-    fetchTemplates(); // ★ テンプレートも取得
-    
-    // クライアントの現在時刻を取得し、即時スクロール（'auto'）
+    fetchTemplates(); 
     const now = new Date();
     setCurrentTime(now); 
-    
-    // ★ ズレ修正: pt-20 (80px) の余白を考慮
     const currentMinute = now.getHours() * 60 + now.getMinutes();
     const scrollPosition = currentMinute * pixelsPerMinute;
     const centerOffset = (window.innerHeight / 2) - (HEADER_PADDING_TOP_PX / 2);
     if (mainContentRef.current) mainContentRef.current.scrollTop = scrollPosition - centerOffset;
     if (sidebarRef.current) sidebarRef.current.scrollTop = scrollPosition - centerOffset;
-    
-    const timer = setInterval(() => setCurrentTime(new Date()), 10000); // 10秒ごと
-
+    const timer = setInterval(() => setCurrentTime(new Date()), 10000); 
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
       setDeferredPrompt(e);
       console.log('beforeinstallprompt fired!');
     };
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-
     return () => {
       clearInterval(timer);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchTasks, fetchTemplates]); // pixelsPerMinute を削除（起動時ズレ対策）
+  }, [fetchTasks, fetchTemplates]); 
 
-  // --- 時間変換ユーティリティ (変更なし) ---
+  // --- 時間変換ユーティリティ ---
   const minutesToTime = (minutes: number): ModalTime => ({
-    hour: Math.floor(minutes / 60),
+    hour: Math.floor(minutes / 60), 
     minute: minutes % 60,
   });
   const timeToMinutes = (time: ModalTime): number => time.hour * 60 + time.minute;
   const formatTime = (timeInMinutes: number) => {
-    const { hour, minute } = minutesToTime(timeInMinutes);
+    const { hour, minute } = minutesToTime(timeInMinutes); 
     if (hour >= 24) return `(翌 ${ (hour % 24).toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")})`;
     return `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
   };
 
-  // --- イベントハンドラ (★★★ 時間ズレ修正版 ★★★) ---
+  // --- イベントハンドラ ---
   const handleBackgroundClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isEditMode || isModalOpen || isTemplateModalOpen || isSaveTemplateModalOpen) return;
     if ((e.target as HTMLElement).closest('.task-item')) return;
-    // e.currentTarget (main 要素) を使う
     const mainEl = e.currentTarget; 
     if (!mainEl) return;
-
     const scrollTop = mainEl.scrollTop;
-    // main 要素の「画面上端からのY座標」を取得 (pt-20 の 80px を含む)
     const mainRectTop = mainEl.getBoundingClientRect().top; 
     const clickY_viewport = e.clientY; 
-    
-    // main 要素の「パディングの上端」からの相対Y座標
     const clickY_relativeToMain = clickY_viewport - mainRectTop; 
-    
-    // pt-20 (80px) のパディング領域自体がクリックされた場合は無視する
-    // pt-20 はPC/スマホ問わず常にかかっている
-    if (clickY_relativeToMain < 0) return; // 念のため
-
-    // スクロール量 + クリック位置 (pt-20を引かない、が正しいはず)
-    // タイムラインの絶対Y座標を計算
+    if (clickY_relativeToMain < 0) return; 
     const absoluteY = scrollTop + clickY_relativeToMain;
-
     let minute = Math.round(absoluteY / pixelsPerMinute);
     minute = Math.min(Math.max(0, minute), TOTAL_MINUTES - 1);
-
     setSelectedTask(null);
     setModalTitle("");
-    setModalTime(minutesToTime(minute));
+    setModalTime(minutesToTime(minute)); 
     setIsModalOpen(true);
   };
 
@@ -227,18 +320,17 @@ export default function HomePage() {
     if (!isEditMode) return;
     if ((event as any).target.type === 'checkbox') return;
     if (dragGhostMinutes !== null) return; 
-
     setSelectedTask(task);
     setModalTitle(task.title);
-    setModalTime(minutesToTime(task.timeInMinutes));
+    setModalTime(minutesToTime(task.timeInMinutes)); 
     setIsModalOpen(true);
   };
 
-  // --- API連携 (変更なし) ---
+  // --- API連携 ---
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!modalTitle) return;
-    const timeInMinutes = timeToMinutes(modalTime);
+    const timeInMinutes = timeToMinutes(modalTime); 
     try {
       if (selectedTask) {
         const response = await fetch(`/api/tasks/${selectedTask.id}`, {
@@ -277,7 +369,7 @@ export default function HomePage() {
     }
   };
 
-  // --- モーダル (変更なし) ---
+  // --- モーダル ---
   const closeModal = () => setIsModalOpen(false);
   const openTemplateModal = () => {
     closeModal(); 
@@ -290,8 +382,7 @@ export default function HomePage() {
   };
   const closeSaveTemplateModal = () => setIsSaveTemplateModalOpen(false);
 
-
-  // --- JSスクロール同期 (変更なし) ---
+  // --- JSスクロール同期 ---
   const handleScroll = (source: 'sidebar' | 'main') => {
     if (isSyncingScroll.current) {
       isSyncingScroll.current = false;
@@ -306,21 +397,15 @@ export default function HomePage() {
     }
   };
 
-  // --- ズーム機能 (★★★ ズレ修正 ★★★) ---
+  // --- ズーム機能 ---
   const handleZoom = (newPixelsPerMinute: number) => {
     if (!mainContentRef.current) return;
-    
-    // pt-20 (80px) を考慮
     const mainRect = mainContentRef.current.getBoundingClientRect();
     const centerViewportY = mainRect.top + mainRect.height / 2;
-    // (クリック位置 - パディング)
     const absoluteY = mainContentRef.current.scrollTop + (centerViewportY - mainRect.top);
-
     const centerMinute = absoluteY / pixelsPerMinute;
     setPixelsPerMinute(newPixelsPerMinute); 
-    
     const newScrollTop = (centerMinute * newPixelsPerMinute) - (mainRect.height / 2);
-    
     requestAnimationFrame(() => {
       if (mainContentRef.current) mainContentRef.current.scrollTop = newScrollTop;
       if (sidebarRef.current) sidebarRef.current.scrollTop = newScrollTop;
@@ -329,7 +414,7 @@ export default function HomePage() {
   const zoomIn = () => handleZoom(Math.min(pixelsPerMinute * 1.5, 20));
   const zoomOut = () => handleZoom(Math.max(pixelsPerMinute / 1.5, MIN_ZOOM_THRESHOLD));
 
-  // --- PWAインストール (変更なし) ---
+  // --- PWAインストール ---
   const handleInstallClick = () => {
     if (deferredPrompt) {
       (deferredPrompt as any).prompt(); 
@@ -339,13 +424,13 @@ export default function HomePage() {
     }
   };
 
-  // --- 赤いバー (変更なし) ---
+  // --- 赤いバー ---
   const currentMinute = currentTime 
     ? currentTime.getHours() * 60 + currentTime.getMinutes() 
     : 0;
   const currentTimeTopPx = currentMinute * pixelsPerMinute;
 
-  // --- 範囲選択 (変更なし) ---
+  // --- 範囲選択 ---
   const handleCheckboxClick = (e: React.MouseEvent, taskId: string) => {
     e.stopPropagation(); 
     const newSelectedIds = new Set(selectedTaskIds);
@@ -370,14 +455,12 @@ export default function HomePage() {
     }
     setSelectedTaskIds(newSelectedIds);
   };
-
-  // 一斉解除 (変更なし)
   const handleClearSelection = () => {
     setSelectedTaskIds(new Set());
     setSelectionAnchor(null);
   };
   
-  // --- 遅延ゼロ自動保存 (変更なし) ---
+  // --- 遅延ゼロ自動保存 ---
   const saveMovedTasks = async () => {
     setIsBatchLoading(true);
     try {
@@ -407,7 +490,6 @@ export default function HomePage() {
       setMovedTaskIds(new Set());
     }
   };
-
   const handleToggleEditMode = (newEditMode: boolean) => {
     if (isEditMode && !newEditMode) {
       if (movedTaskIds.size > 0) saveMovedTasks();
@@ -417,7 +499,7 @@ export default function HomePage() {
     setIsEditMode(newEditMode);
   };
 
-  // --- 一括削除 (変更なし) ---
+  // --- 一括削除 ---
   const handleBatchDelete = async () => {
     if (selectedTaskIds.size === 0) return;
     setIsBatchLoading(true);
@@ -440,7 +522,7 @@ export default function HomePage() {
     }
   };
 
-  // +1m / -1m (変更なし)
+  // +1m / -1m
   const handleBatchOperation = (operation: 'move-up' | 'move-down') => {
     const deltaMinutes = operation === 'move-up' ? -1 : 1;
     setTasks(currentTasks => 
@@ -456,7 +538,7 @@ export default function HomePage() {
     setMovedTaskIds(newMovedIds);
   };
   
-  // --- ドラッグ＆ドロップ (★★★ ズレ修正 ★★★) ---
+  // --- ドラッグ＆ドロップ ---
   const handleDragStart = (e: DragEvent<HTMLDivElement>, task: Task) => {
     if (!selectedTaskIds.has(task.id)) {
       setSelectedTaskIds(new Set([task.id]));
@@ -464,31 +546,21 @@ export default function HomePage() {
     }
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setDragImage(new Image(), 0, 0); 
-    
-    // ★★★ 変更点: ドラッグ開始の「Y座標」を、pt-20 を考慮した相対Y座標で記録
     const mainRectTop = mainContentRef.current!.getBoundingClientRect().top;
-    setDragStartY(e.clientY - mainRectTop); // 画面Y座標 -> main要素のY座標
-    // ★★★ ここまで ★★★
-    
+    setDragStartY(e.clientY - mainRectTop); 
     setDragStartMinutes(task.timeInMinutes);
     setDragStartTaskId(task.id);
   };
-  
   const handleDragOverMain = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault(); 
     if (dragStartTaskId === null) return;
-
-    // ★★★ 変更点: pt-20 を考慮 ★★★
     const mainRectTop = e.currentTarget.getBoundingClientRect().top;
-    const currentY_relativeToMain = e.clientY - mainRectTop; // main要素のY座標
-    const deltaY = currentY_relativeToMain - dragStartY; // 開始Y座標からの差分
-    // ★★★ ここまで ★★★
-
+    const currentY_relativeToMain = e.clientY - mainRectTop; 
+    const deltaY = currentY_relativeToMain - dragStartY; 
     const deltaMinutes = Math.round(deltaY / pixelsPerMinute);
     const newGhostMinutes = dragStartMinutes + deltaMinutes;
     setDragGhostMinutes(newGhostMinutes);
   };
-  // (handleDrop, handleDragEnd は変更なし)
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     if (dragGhostMinutes === null || dragStartTaskId === null) return; 
@@ -515,9 +587,7 @@ export default function HomePage() {
     setDragStartTaskId(null);
   };
 
-  // --- テンプレート機能のハンドラ (変更なし) ---
-  
-  // テンプレートを保存
+  // --- テンプレート機能のハンドラ ---
   const handleSaveTemplate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTemplateName || selectedTaskIds.size === 0) return;
@@ -538,7 +608,7 @@ export default function HomePage() {
       if (response.ok) {
         closeSaveTemplateModal();
         handleClearSelection();
-        await fetchTemplates(); // テンプレートリストを更新
+        await fetchTemplates(); 
       } else {
         console.error('テンプレートの保存に失敗しました', await response.json());
       }
@@ -548,8 +618,6 @@ export default function HomePage() {
       setIsBatchLoading(false);
     }
   };
-
-  // テンプレートを削除
   const handleDeleteTemplate = async (templateId: string) => {
     if (!window.confirm("このテンプレートを削除しますか？")) return;
     try {
@@ -557,7 +625,7 @@ export default function HomePage() {
         method: 'DELETE',
       });
       if (response.ok) {
-        await fetchTemplates(); // テンプレートリストを更新
+        await fetchTemplates(); 
       } else {
         console.error('テンプレートの削除に失敗しました', await response.json());
       }
@@ -565,8 +633,6 @@ export default function HomePage() {
       console.error('テンプレートの削除中にエラー:', error);
     }
   };
-
-  // テンプレートをタイムラインに適用（一括作成）
   const handleApplyTemplate = async (templateId: string) => {
     const startTimeInMinutes = timeToMinutes(modalTime); 
     try {
@@ -593,37 +659,30 @@ export default function HomePage() {
     }
   };
 
-  // ★★★ 長押しイベントハンドラ (変更なし) ★★★
+  // --- 長押しイベントハンドラ ---
   const handleZoomButtonPress = () => {
-    // 押された瞬間に、長押しタイマーを開始
-    isLongPressed.current = false; // 長押しフラグをリセット
+    isLongPressed.current = false; 
     longPressTimer.current = setTimeout(() => {
-      // 500ms経過したら、長押し成功
-      isLongPressed.current = true; // フラグを立てる
-      scrollToCurrentTime(); // 現在時刻へジャンプ
+      isLongPressed.current = true; 
+      scrollToCurrentTime(); 
     }, LONG_PRESS_DURATION);
   };
-
   const handleZoomButtonRelease = () => {
-    // ボタンが離された時
     if (longPressTimer.current) {
-      clearTimeout(longPressTimer.current); // タイマーをクリア
+      clearTimeout(longPressTimer.current); 
       longPressTimer.current = null;
     }
-    
-    // もし長押しが「成功していなかった」場合（＝短押し）
     if (!isLongPressed.current) {
-      zoomIn(); // 通常のズームインを実行
+      zoomIn(); 
     }
-    // 長押しが成功していた場合は、何もしない（ジャンプだけが実行される）
-    isLongPressed.current = false; // フラグをリセット
+    isLongPressed.current = false; 
   };
 
 
   // レンダリング (JSX)
   return (
     <>
-      {/* --- 1. 固定ヘッダー (トグルスイッチ) (変更なし) --- */}
+      {/* --- 1. 固定ヘッダー (トグルスイッチ) --- */}
       <div className="flex fixed top-4 left-1/2 -translate-x-1/2 z-50 items-center gap-2 p-2 bg-background rounded-full shadow-lg">
         {/* PC用ズームボタン */}
         <div className="hidden md:flex items-center gap-2">
@@ -646,14 +705,13 @@ export default function HomePage() {
         <span className={`text-sm mr-2 transition-colors ${isEditMode ? 'text-primary font-semibold' : 'text-muted-foreground'}`}>編集</span>
       </div>
 
-      {/* --- 2. タイムライン本体 (JS同期スクロールコンテナ) (変更なし) --- */}
-      {/* ★ 変更点: pt-20 を className -> style に移動 (定数を使うため) */}
+      {/* --- 2. タイムライン本体 --- */}
       <div className="absolute inset-0 flex flex-row" style={{ paddingTop: `${HEADER_PADDING_TOP_PX}px` }}>
         
-        {/* 2a. 左サイドバー (物差し) (変更なし) */}
+        {/* 2a. 左サイドバー (物差し) */}
         <aside 
           ref={sidebarRef}
-          className="flex-shrink-0 border-muted h-full border-r overflow-y-auto w-20 md:w-24" // スマホ余白
+          className="flex-shrink-0 border-muted h-full border-r overflow-y-auto w-20 md:w-24" 
           onScroll={() => handleScroll('sidebar')}
         >
           <div className="relative" style={{ height: `${TIMELINE_HEIGHT_PX}px` }}>
@@ -661,16 +719,15 @@ export default function HomePage() {
               const hour = Math.floor(index / 2);
               const isHalfHour = index % 2 !== 0;
               const currentMinutes = index * 30;
-
               return (
                 <div
                   key={index}
-                  className="absolute flex items-start w-full px-1 md:px-2" // pt-1 削除済み (時間ズレ修正)
+                  className="absolute flex items-start w-full px-1 md:px-2" 
                   style={{ top: `${currentMinutes * pixelsPerMinute}px` }}
                 >
                   <div className="flex items-center justify-start w-full">
                     <span className="text-sm text-muted-foreground text-left w-12 md:w-14 flex-shrink-0">
-                      {!isHalfHour && ( // 00分の時だけ時間を表示
+                      {!isHalfHour && ( 
                         hour >= 24 ? `(翌 ${(hour % 24).toString().padStart(2, "0")}:00)` : `${hour.toString().padStart(2, "0")}:00`
                       )}
                     </span>
@@ -682,10 +739,10 @@ export default function HomePage() {
           </div>
         </aside>
 
-        {/* 2b. メインコンテンツ (タスク) (変更なし) */}
+        {/* 2b. メインコンテンツ (タスク) */}
         <main
           ref={mainContentRef}
-          className={`flex-1 overflow-y-auto relative transition-colors h-full pl-2 md:pl-4 ${isEditMode ? 'bg-muted/30' : ''}`} // スマホ余白
+          className={`flex-1 overflow-y-auto relative transition-colors h-full pl-2 md:pl-4 ${isEditMode ? 'bg-muted/30' : ''}`} 
           onClick={handleBackgroundClick}
           onScroll={() => handleScroll('main')}
           style={{ cursor: isEditMode ? 'copy' : 'default' }}
@@ -695,7 +752,7 @@ export default function HomePage() {
         >
           <div className="relative w-full" style={{ height: `${TIMELINE_HEIGHT_PX}px` }}>
             
-            {/* 赤いバー (currentTime が null でない時だけ描画) (変更なし) */}
+            {/* 赤いバー */}
             {!isEditMode && currentTime && (
               <div 
                 className="absolute left-0 right-0 h-0.5 bg-primary z-10 pointer-events-none"
@@ -705,14 +762,14 @@ export default function HomePage() {
               </div>
             )}
 
-            {/* タスク一覧 (余白詰め修正) (変更なし) */}
+            {/* タスク一覧 */}
             {tasks.map((task) => {
               const isSelected = selectedTaskIds.has(task.id);
               return (
                 <div
                   key={task.id}
                   className={`task-item absolute flex items-center p-2 rounded z-20
-                             left-2 right-2 md:left-4 md:right-4 ${ // スマホ余白
+                             left-2 right-2 md:left-4 md:right-4 ${
                     isEditMode ? 'cursor-pointer hover:bg-muted' : ''
                   } ${
                     isEditMode && isSelected ? 'bg-primary/20' : ''
@@ -733,13 +790,12 @@ export default function HomePage() {
                   {isEditMode && (
                     <input
                       type="checkbox"
-                      className="block h-4 w-4 mr-1 md:mr-3 cursor-pointer" // スマホ余白
+                      className="block h-4 w-4 mr-1 md:mr-3 cursor-pointer" 
                       checked={isSelected}
                       onClick={(e) => handleCheckboxClick(e, task.id)}
                       readOnly 
                     />
                   )}
-                  {/* ★ 余白削除済み (w- と text-right を削除) */}
                   <span className="font-mono text-foreground md:text-muted-foreground mr-2 md:mr-4">
                     {formatTime(task.timeInMinutes)}
                   </span>
@@ -748,7 +804,7 @@ export default function HomePage() {
               );
             })}
             
-            {/* ドラッグ中のゴースト表示 (余白詰め修正) (変更なし) */}
+            {/* ドラッグ中のゴースト表示 */}
             {dragGhostMinutes !== null && (
               <div 
                 className="absolute left-0 right-0 z-30 pointer-events-none"
@@ -768,13 +824,12 @@ export default function HomePage() {
                         key={task.id}
                         className="task-item-ghost absolute flex items-center p-2 rounded z-20
                                    opacity-50 bg-primary/30 border border-primary
-                                   left-2 right-2 md:left-4 md:right-4" // スマホ余白
+                                   left-2 right-2 md:left-4 md:right-4" 
                         style={{ top: `${ghostTopPx}px` }}
                       >
                         {isEditMode && (
-                          <div className="h-4 w-4 mr-1 md:mr-3" /> // スマホ余白
+                          <div className="h-4 w-4 mr-1 md:mr-3" /> 
                         )}
-                        {/* ★ 余白削除済み (w- と text-right を削除) */}
                         <span className="font-mono text-foreground md:text-muted-foreground mr-2 md:mr-4">
                           {formatTime(ghostTaskTime)}
                         </span>
@@ -791,9 +846,8 @@ export default function HomePage() {
       </div> {/* --- 2. タイムライン本体 終了 --- */}
 
 
-      {/* --- 3. スマホ用ズームボタン (浮遊ボタン) (★★★ ズレ修正 ★★★) --- */}
+      {/* --- 3. スマホ用ズームボタン --- */}
       <div className="fixed bottom-6 right-6 z-30 flex flex-col gap-3 md:hidden">
-        {/* ★ 変更点: Flexbox中央揃えを「削除」し、元のスタイルに戻す */}
         <button 
           onMouseDown={handleZoomButtonPress}
           onMouseUp={handleZoomButtonRelease}
@@ -805,7 +859,6 @@ export default function HomePage() {
         >
           +
         </button>
-        {/* ★ 変更点: Flexbox中央揃えを「削除」し、元のスタイルに戻す */}
         <button 
           onClick={zoomOut}
           className="w-14 h-14 rounded-full bg-background shadow-lg text-2xl hover:bg-muted active:bg-muted/80"
@@ -817,7 +870,7 @@ export default function HomePage() {
       </div>
 
       
-      {/* --- 4. PWAインストールボタン (ズームアウトで表示) (変更なし) --- */}
+      {/* --- 4. PWAインストールボタン --- */}
       {deferredPrompt && pixelsPerMinute <= MIN_ZOOM_THRESHOLD && (
         <button
           onClick={handleInstallClick}
@@ -836,13 +889,12 @@ export default function HomePage() {
       )}
 
 
-      {/* ★★★ 5. 一括操作パネル (変更なし) ★★★ */}
+      {/* --- 5. 一括操作パネル --- */}
       {isEditMode && selectedTaskIds.size > 0 && (
         <div 
           className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 
                      flex items-center gap-2 p-3 bg-background rounded-full shadow-lg"
         >
-          {/* 一斉解除ボタン (変更なし) */}
           <button
             onClick={handleClearSelection}
             className="text-sm text-primary font-semibold ml-2 px-3 py-1 rounded-full hover:bg-muted transition-colors"
@@ -850,37 +902,29 @@ export default function HomePage() {
           >
             {selectedTaskIds.size}件 選択中
           </button>
-          
           <div className="border-l h-6 mx-2 border-muted"></div>
-          
-          {/* +1m / -1m ボタン (変更なし) */}
           <button
-            onClick={() => handleBatchOperation('move-down')} // 遅延ゼロ
+            onClick={() => handleBatchOperation('move-down')} 
             className="w-12 h-10 rounded-full hover:bg-muted disabled:opacity-50"
             disabled={isBatchLoading}
           >
             +1m
           </button>
           <button
-            onClick={() => handleBatchOperation('move-up')} // 遅延ゼロ
+            onClick={() => handleBatchOperation('move-up')} 
             className="w-12 h-10 rounded-full hover:bg-muted disabled:opacity-50"
             disabled={isBatchLoading}
           >
             -1m
           </button>
-
           <div className="border-l h-6 mx-2 border-muted"></div>
-          
-          {/* 一括削除ボタン (変更なし) */}
           <button
-            onClick={handleBatchDelete} // API呼び出し
+            onClick={handleBatchDelete} 
             className="w-16 h-10 rounded-full text-primary hover:bg-primary/20 disabled:opacity-50"
             disabled={isBatchLoading}
           >
             削除
           </button>
-          
-          {/* ★ 「テンプレートとして保存」ボタン (変更なし) ★ */}
           <div className="border-l h-6 mx-2 border-muted"></div>
           <button
             onClick={openSaveTemplateModal}
@@ -890,12 +934,11 @@ export default function HomePage() {
           >
             保存
           </button>
-          
         </div>
       )}
 
 
-      {/* ★★★ 6. タスク追加/編集モーダル (変更なし) ★★★ */}
+      {/* --- 6. タスク追加/編集モーダル --- */}
       <div
         className={`fixed inset-0 flex items-center justify-center z-50 transition-opacity duration-300 ${
           isModalOpen ? "opacity-100" : "opacity-0 pointer-events-none"
@@ -913,8 +956,8 @@ export default function HomePage() {
             {selectedTask ? "タスクの編集" : "新規タスクの追加"}
           </h2>
           
-          {/* ★ 「休憩」ボタン と 「テンプレート」ボタン (変更なし) ★ */}
-          {!selectedTask && ( // 新規追加の時だけ表示
+          {/* 休憩・テンプレートボタン */}
+          {!selectedTask && ( 
             <div className="mb-4 flex justify-center gap-3">
               <button
                 type="button"
@@ -933,34 +976,35 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* 時間入力 (変更なし) */}
-          <div className="mb-6 time-select-wrapper">
-            <select
+          {/* マージンを mb-6 から mb-4 に詰めて領域節約 */}
+          <div className="mb-4 time-select-wrapper">
+            {/* 中央のハイライト */}
+            <div className="time-wheel-center-highlight" />
+
+            {/* 時 (Hour) のピッカー */}
+            <TimePickerWheel
+              items={hourPickerItems} 
               value={modalTime.hour}
-              onChange={(e) => setModalTime({ ...modalTime, hour: Number(e.target.value) })}
-              className="time-select"
-            >
-              {Array.from({ length: TOTAL_HOURS }).map((_, h) => (
-                <option key={h} value={h} className="bg-muted text-foreground">
-                  {h >= 24 ? `(翌 ${ (h % 24).toString().padStart(2, "0")})` : h.toString().padStart(2, "0")}
-                </option>
-              ))}
-            </select>
-            <span className="time-separator">h</span>
-            <select
+              onChange={(newHour) => setModalTime({ ...modalTime, hour: newHour })}
+              unit="h"
+              formatLabel={(h) => 
+                h >= 24 
+                  ? `(翌 ${(h % 24).toString().padStart(2, "0")})` 
+                  : h.toString().padStart(2, "0")
+              }
+            />
+            
+            {/* 分 (Minute) のピッカー */}
+            <TimePickerWheel
+              items={minutePickerItems} 
               value={modalTime.minute}
-              onChange={(e) => setModalTime({ ...modalTime, minute: Number(e.target.value) })}
-              className="time-select"
-            >
-              {Array.from({ length: 60 }).map((_, m) => (
-                <option key={m} value={m} className="bg-muted text-foreground">
-                  {m.toString().padStart(2, "0")}
-                </option>
-              ))}
-            </select>
-            <span className="time-separator">m</span>
+              onChange={(newMinute) => setModalTime({ ...modalTime, minute: newMinute })}
+              unit="m"
+              formatLabel={(m) => m.toString().padStart(2, "0")}
+            />
           </div>
-          {/* タスク名入力 (変更なし) */}
+          
+          {/* タスク名入力 */}
           <div className="mb-8">
             <input
               type="text"
@@ -971,7 +1015,8 @@ export default function HomePage() {
               required
             />
           </div>
-          {/* ボタン (変更なし) */}
+          
+          {/* ボタン */}
           <div className="flex justify-between">
             {selectedTask ? (
               <button
@@ -1001,7 +1046,7 @@ export default function HomePage() {
         </form>
       </div>
       
-      {/* ★★★ 7. テンプレート管理モーダル (新規) (変更なし) ★★★ */}
+      {/* --- 7. テンプレート管理モーダル --- */}
       <div
         className={`fixed inset-0 flex items-center justify-center z-50 transition-opacity duration-300 ${
           isTemplateModalOpen ? "opacity-100" : "opacity-0 pointer-events-none"
@@ -1020,7 +1065,6 @@ export default function HomePage() {
             （{formatTime(timeToMinutes(modalTime))} から開始）
           </p>
           
-          {/* ピクセルアート風ボタンのコンテナ (ご要望) */}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4 max-h-64 overflow-y-auto pr-2">
             {templates.length === 0 && (
               <p className="text-muted-foreground col-span-full text-center">保存されたテンプレートがありません。</p>
@@ -1028,7 +1072,6 @@ export default function HomePage() {
             
             {templates.map(template => (
               <div key={template.id} className="relative group">
-                {/* テンプレート適用ボタン */}
                 <button
                   type="button"
                   onClick={() => handleApplyTemplate(template.id)}
@@ -1039,8 +1082,6 @@ export default function HomePage() {
                   <span className="text-lg font-semibold">{template.name}</span>
                   <span className="text-xs text-muted-foreground">{template.tasks.length}件のタスク</span>
                 </button>
-                
-                {/* テンプレート削除ボタン */}
                 <button
                   type="button"
                   onClick={() => handleDeleteTemplate(template.id)}
@@ -1066,7 +1107,7 @@ export default function HomePage() {
         </div>
       </div>
       
-      {/* ★★★ 8. テンプレート保存モーダル (新規) (変更なし) ★★★ */}
+      {/* --- 8. テンプレート保存モーダル --- */}
       <div
         className={`fixed inset-0 flex items-center justify-center z-50 transition-opacity duration-300 ${
           isSaveTemplateModalOpen ? "opacity-100" : "opacity-0 pointer-events-none"

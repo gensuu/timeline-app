@@ -1,48 +1,76 @@
-/* 1. Tailwind CSSの基本設定を読み込み (最重要) */
+/* 1. Tailwind CSSの基本設定を読み込み */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
-  /*
-   * ★★★ :root { ... } のブロック全体が「削除」されていることを確認 ★★★
-   */
-
-  /* body への基本設定 */
   body {
-    background-color: hsl(220 10% 15%); /* 値を直接指定 */
-    color: hsl(210 10% 80%);      /* 値を直接指定 */
-  }
-
-  /* 時間入力 <select> のスタイルをリセット */
-  select {
-    appearance: none;
-    -webkit-appearance: none;
-    -moz-appearance: none;
-    background-color: transparent;
-    border: none;
-    padding: 0;
-    margin: 0;
-    font-family: inherit;
-    font-size: inherit;
-    cursor: inherit;
-    line-height: inherit;
-    outline: none;
+    background-color: hsl(220 10% 15%);
+    color: hsl(210 10% 80%);
   }
 }
 
 /* 3. コンポーネントスタイル */
 @layer components {
-  /* 時間入力（ドラムロール風）のラッパー */
+  /*
+   * ★ 変更点: 高さを px で固定 (JSの計算と合わせるため)
+   * 全体高さ 96px = アイテム48px + 上下パディング24pxずつ
+   */
   .time-select-wrapper {
-    @apply bg-muted rounded-md p-3 flex items-center justify-center text-2xl font-mono;
+    @apply bg-muted rounded-md flex items-center justify-center font-mono
+           relative overflow-hidden gap-2;
+    height: 96px; /* h-24相当だがpx固定 */
   }
-  /* 時間入力の <select> 自体 */
-  .time-select {
-    @apply bg-transparent text-foreground text-center focus:outline-none;
+
+  /* スクロールバー非表示 */
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
-  /* 時間入力の「h」「m」のセパネータ */
-  .time-separator {
-    @apply text-muted-foreground mx-1 text-xl;
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* ドラムロールピッカーのコンテナ */
+  .time-wheel {
+    @apply h-full overflow-y-scroll snap-y snap-mandatory no-scrollbar flex-1;
+    
+    /* 上下のパディングを px で固定 (重要) */
+    padding-top: 24px;
+    padding-bottom: 24px;
+    
+    /* 常にスナップさせる */
+    scroll-snap-stop: always;
+  }
+  
+  /* ピッカー内の各項目 */
+  .time-wheel-item {
+    @apply flex items-center justify-center 
+           snap-center 
+           text-muted-foreground/50 transition-all duration-200;
+    
+    /* アイテムの高さも px で固定 (重要) */
+    height: 48px; 
+    font-size: 1.25rem; /* 通常時は少し小さく */
+  }
+
+  /* ピッカーの中央の線 (ハイライト) */
+  .time-wheel-center-highlight {
+    @apply absolute left-0 right-0 top-1/2 -translate-y-1/2
+           border-y border-foreground/10 pointer-events-none
+           flex items-center justify-end;
+    height: 48px; /* アイテムの高さに合わせる */
+  }
+  
+  /* ★ 変更点: 選択中の文字を太字・サイズアップ・色を濃く */
+  .time-wheel-item-snapped {
+    @apply text-foreground font-bold scale-125; /* scale-110 -> 125 に強調 */
+    opacity: 1 !important;
+  }
+
+  .time-wheel-unit-label {
+    @apply text-muted-foreground text-xl font-sans pt-1; /* 微調整 */
+    margin-left: -0.5rem;
+    margin-right: 1rem;
   }
 }
