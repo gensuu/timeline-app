@@ -30,11 +30,13 @@ interface Template {
 }
 type ModalTime = { hour: number; minute: number };
 
-// --- 定数 (変更なし) ---
+// --- 定数 ---
 const TOTAL_HOURS = 31; // 翌朝7時までの31時間
 const MINUTES_PER_HOUR = 60;
 const TOTAL_MINUTES = TOTAL_HOURS * MINUTES_PER_HOUR;
 const MIN_ZOOM_THRESHOLD = 0.3; // PWAインストールボタンを表示するズームのしきい値
+const LONG_PRESS_DURATION = 500; // 長押し判定の時間 (500ms)
+const HEADER_PADDING_TOP_PX = 80; // pt-20 (5rem * 16px) の固定値
 
 /**
  * 24hタイムライン アプリケーションのメインページ
@@ -48,7 +50,7 @@ export default function HomePage() {
   const [modalTitle, setModalTitle] = useState("");
   const [modalTime, setModalTime] = useState<ModalTime>({ hour: 0, minute: 0 });
   const [pixelsPerMinute, setPixelsPerMinute] = useState(2); 
-  const [currentTime, setCurrentTime] = useState<Date | null>(null); // 赤いバーのズレ修正 (null初期化)
+  const [currentTime, setCurrentTime] = useState<Date | null>(null); 
 
   // --- 範囲選択 (既存) ---
   const [selectedTaskIds, setSelectedTaskIds] = useState(new Set<string>());
@@ -60,7 +62,7 @@ export default function HomePage() {
   const [movedTaskIds, setMovedTaskIds] = useState(new Set<string>());
 
   // ドラッグ＆ドロップ (既存)
-  const [dragStartY, setDragStartY] = useState(0);
+  const [dragStartY, setDragStartY] = useState(0); // ★ ズレ修正: これは main 要素の相対Y座標
   const [dragStartMinutes, setDragStartMinutes] = useState(0);
   const [dragGhostMinutes, setDragGhostMinutes] = useState<number | null>(null);
   const [dragStartTaskId, setDragStartTaskId] = useState<string | null>(null);
@@ -73,13 +75,15 @@ export default function HomePage() {
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [isSaveTemplateModalOpen, setIsSaveTemplateModalOpen] = useState(false);
   const [newTemplateName, setNewTemplateName] = useState("");
-  // ★★★ ここまで ★★★
-
-
+  
   // --- Ref (変更なし) ---
   const mainContentRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLDivElement>(null); 
   const isSyncingScroll = useRef(false); 
+
+  // ★★★ 長押し機能用の Ref (変更なし) ★★★
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const isLongPressed = useRef(false); // 長押しが成功したかを判定するフラグ
 
   // --- 動的な高さ計算 (変更なし) ---
   const { TIMELINE_HEIGHT_PX, HOUR_HEIGHT_PX } = useMemo(() => {
@@ -87,6 +91,33 @@ export default function HomePage() {
     const TIMELINE_HEIGHT_PX = TOTAL_HOURS * HOUR_HEIGHT_PX;
     return { TIMELINE_HEIGHT_PX, HOUR_HEIGHT_PX };
   }, [pixelsPerMinute]);
+
+
+  // ★★★ 現在時刻へジャンプする関数 (★★★ ズレ修正 ★★★) ★★★
+  const scrollToCurrentTime = (behavior: 'smooth' | 'auto' = 'smooth') => {
+    if (!mainContentRef.current || !sidebarRef.current) return;
+
+    // 現在時刻を強制的に最新に更新
+    const now = new Date();
+    setCurrentTime(now); 
+
+    const currentMinute = now.getHours() * 60 + now.getMinutes();
+    // ★ ズレ修正: pt-20 (80px) の余白を考慮
+    const scrollPosition = (currentMinute * pixelsPerMinute); 
+    const centerOffset = (window.innerHeight / 2) - (HEADER_PADDING_TOP_PX / 2); // 画面中央に
+
+    // スムーズスクロールを適用
+    mainContentRef.current.scrollTo({
+      top: scrollPosition - centerOffset,
+      behavior: behavior,
+    });
+    // サイドバーも（JS同期が間に合わない場合を考慮し）直接スクロール
+    sidebarRef.current.scrollTo({
+      top: scrollPosition - centerOffset,
+      behavior: behavior,
+    });
+  };
+
 
   // --- データ取得 (変更なし) ---
   const fetchTasks = useCallback(async () => {
@@ -115,19 +146,19 @@ export default function HomePage() {
     }
   }, []);
 
-  // --- useEffect (マウント時) (変更なし) ---
+  // --- useEffect (マウント時) (★★★ ズレ修正 ★★★) ---
   useEffect(() => {
     fetchTasks();
     fetchTemplates(); // ★ テンプレートも取得
     
-    // クライアント（ブラウザ）の現在時刻を「今」取得する
+    // クライアントの現在時刻を取得し、即時スクロール（'auto'）
     const now = new Date();
     setCurrentTime(now); 
     
+    // ★ ズレ修正: pt-20 (80px) の余白を考慮
     const currentMinute = now.getHours() * 60 + now.getMinutes();
     const scrollPosition = currentMinute * pixelsPerMinute;
-    const centerOffset = (window.innerHeight / 2);
-
+    const centerOffset = (window.innerHeight / 2) - (HEADER_PADDING_TOP_PX / 2);
     if (mainContentRef.current) mainContentRef.current.scrollTop = scrollPosition - centerOffset;
     if (sidebarRef.current) sidebarRef.current.scrollTop = scrollPosition - centerOffset;
     
@@ -145,7 +176,7 @@ export default function HomePage() {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchTasks, fetchTemplates]); // pixelsPerMinute は意図的に除外（起動時のみ実行）
+  }, [fetchTasks, fetchTemplates]); // pixelsPerMinute を削除（起動時ズレ対策）
 
   // --- 時間変換ユーティリティ (変更なし) ---
   const minutesToTime = (minutes: number): ModalTime => ({
@@ -159,18 +190,28 @@ export default function HomePage() {
     return `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
   };
 
-  // --- イベントハンドラ (時間ズレ修正版) (変更なし) ---
+  // --- イベントハンドラ (★★★ 時間ズレ修正版 ★★★) ---
   const handleBackgroundClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isEditMode || isModalOpen || isTemplateModalOpen || isSaveTemplateModalOpen) return;
     if ((e.target as HTMLElement).closest('.task-item')) return;
-    if (!mainContentRef.current) return;
+    // e.currentTarget (main 要素) を使う
+    const mainEl = e.currentTarget; 
+    if (!mainEl) return;
 
-    // pt-20 (80px) を考慮したロジック
-    const scrollTop = mainContentRef.current.scrollTop;
-    const mainRect = mainContentRef.current.getBoundingClientRect(); // pt-20 を含む main 要素
-    const mainRectTop = mainRect.top; 
+    const scrollTop = mainEl.scrollTop;
+    // main 要素の「画面上端からのY座標」を取得 (pt-20 の 80px を含む)
+    const mainRectTop = mainEl.getBoundingClientRect().top; 
     const clickY_viewport = e.clientY; 
-    const clickY_relativeToMain = clickY_viewport - mainRectTop;
+    
+    // main 要素の「パディングの上端」からの相対Y座標
+    const clickY_relativeToMain = clickY_viewport - mainRectTop; 
+    
+    // pt-20 (80px) のパディング領域自体がクリックされた場合は無視する
+    // pt-20 はPC/スマホ問わず常にかかっている
+    if (clickY_relativeToMain < 0) return; // 念のため
+
+    // スクロール量 + クリック位置 (pt-20を引かない、が正しいはず)
+    // タイムラインの絶対Y座標を計算
     const absoluteY = scrollTop + clickY_relativeToMain;
 
     let minute = Math.round(absoluteY / pixelsPerMinute);
@@ -184,8 +225,8 @@ export default function HomePage() {
 
   const handleTaskClick = (task: Task) => {
     if (!isEditMode) return;
-    if ((event as any).target.type === 'checkbox') return; // チェックボックスクリック時はモーダルを開かない
-    if (dragGhostMinutes !== null) return; // ドラッグ中はモーダルを開かない
+    if ((event as any).target.type === 'checkbox') return;
+    if (dragGhostMinutes !== null) return; 
 
     setSelectedTask(task);
     setModalTitle(task.title);
@@ -265,15 +306,21 @@ export default function HomePage() {
     }
   };
 
-  // --- ズーム機能 (変更なし) ---
+  // --- ズーム機能 (★★★ ズレ修正 ★★★) ---
   const handleZoom = (newPixelsPerMinute: number) => {
     if (!mainContentRef.current) return;
+    
+    // pt-20 (80px) を考慮
     const mainRect = mainContentRef.current.getBoundingClientRect();
     const centerViewportY = mainRect.top + mainRect.height / 2;
+    // (クリック位置 - パディング)
     const absoluteY = mainContentRef.current.scrollTop + (centerViewportY - mainRect.top);
+
     const centerMinute = absoluteY / pixelsPerMinute;
     setPixelsPerMinute(newPixelsPerMinute); 
+    
     const newScrollTop = (centerMinute * newPixelsPerMinute) - (mainRect.height / 2);
+    
     requestAnimationFrame(() => {
       if (mainContentRef.current) mainContentRef.current.scrollTop = newScrollTop;
       if (sidebarRef.current) sidebarRef.current.scrollTop = newScrollTop;
@@ -409,7 +456,7 @@ export default function HomePage() {
     setMovedTaskIds(newMovedIds);
   };
   
-  // ドラッグ＆ドロップ (変更なし)
+  // --- ドラッグ＆ドロップ (★★★ ズレ修正 ★★★) ---
   const handleDragStart = (e: DragEvent<HTMLDivElement>, task: Task) => {
     if (!selectedTaskIds.has(task.id)) {
       setSelectedTaskIds(new Set([task.id]));
@@ -417,18 +464,31 @@ export default function HomePage() {
     }
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setDragImage(new Image(), 0, 0); 
-    setDragStartY(e.clientY);
+    
+    // ★★★ 変更点: ドラッグ開始の「Y座標」を、pt-20 を考慮した相対Y座標で記録
+    const mainRectTop = mainContentRef.current!.getBoundingClientRect().top;
+    setDragStartY(e.clientY - mainRectTop); // 画面Y座標 -> main要素のY座標
+    // ★★★ ここまで ★★★
+    
     setDragStartMinutes(task.timeInMinutes);
     setDragStartTaskId(task.id);
   };
+  
   const handleDragOverMain = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault(); 
     if (dragStartTaskId === null) return;
-    const deltaY = e.clientY - dragStartY;
+
+    // ★★★ 変更点: pt-20 を考慮 ★★★
+    const mainRectTop = e.currentTarget.getBoundingClientRect().top;
+    const currentY_relativeToMain = e.clientY - mainRectTop; // main要素のY座標
+    const deltaY = currentY_relativeToMain - dragStartY; // 開始Y座標からの差分
+    // ★★★ ここまで ★★★
+
     const deltaMinutes = Math.round(deltaY / pixelsPerMinute);
     const newGhostMinutes = dragStartMinutes + deltaMinutes;
     setDragGhostMinutes(newGhostMinutes);
   };
+  // (handleDrop, handleDragEnd は変更なし)
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     if (dragGhostMinutes === null || dragStartTaskId === null) return; 
@@ -533,6 +593,33 @@ export default function HomePage() {
     }
   };
 
+  // ★★★ 長押しイベントハンドラ (変更なし) ★★★
+  const handleZoomButtonPress = () => {
+    // 押された瞬間に、長押しタイマーを開始
+    isLongPressed.current = false; // 長押しフラグをリセット
+    longPressTimer.current = setTimeout(() => {
+      // 500ms経過したら、長押し成功
+      isLongPressed.current = true; // フラグを立てる
+      scrollToCurrentTime(); // 現在時刻へジャンプ
+    }, LONG_PRESS_DURATION);
+  };
+
+  const handleZoomButtonRelease = () => {
+    // ボタンが離された時
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current); // タイマーをクリア
+      longPressTimer.current = null;
+    }
+    
+    // もし長押しが「成功していなかった」場合（＝短押し）
+    if (!isLongPressed.current) {
+      zoomIn(); // 通常のズームインを実行
+    }
+    // 長押しが成功していた場合は、何もしない（ジャンプだけが実行される）
+    isLongPressed.current = false; // フラグをリセット
+  };
+
+
   // レンダリング (JSX)
   return (
     <>
@@ -560,9 +647,10 @@ export default function HomePage() {
       </div>
 
       {/* --- 2. タイムライン本体 (JS同期スクロールコンテナ) (変更なし) --- */}
-      <div className="absolute inset-0 flex flex-row pt-20">
+      {/* ★ 変更点: pt-20 を className -> style に移動 (定数を使うため) */}
+      <div className="absolute inset-0 flex flex-row" style={{ paddingTop: `${HEADER_PADDING_TOP_PX}px` }}>
         
-        {/* 2a. 左サイドバー (物差し) (★ 小さい目盛り修正 ★) */}
+        {/* 2a. 左サイドバー (物差し) (変更なし) */}
         <aside 
           ref={sidebarRef}
           className="flex-shrink-0 border-muted h-full border-r overflow-y-auto w-20 md:w-24" // スマホ余白
@@ -580,16 +668,12 @@ export default function HomePage() {
                   className="absolute flex items-start w-full px-1 md:px-2" // pt-1 削除済み (時間ズレ修正)
                   style={{ top: `${currentMinutes * pixelsPerMinute}px` }}
                 >
-                  {/* ★★★ 変更点: 小さい目盛りを描画する正しいロジック ★★★ */}
                   <div className="flex items-center justify-start w-full">
-                    {/* 1. 時間ラベル (w-12 or w-14、flex-shrink-0 で縮まないようにする) */}
                     <span className="text-sm text-muted-foreground text-left w-12 md:w-14 flex-shrink-0">
                       {!isHalfHour && ( // 00分の時だけ時間を表示
                         hour >= 24 ? `(翌 ${(hour % 24).toString().padStart(2, "0")}:00)` : `${hour.toString().padStart(2, "0")}:00`
                       )}
                     </span>
-                    
-                    {/* 2. 目盛り (ml-1 or ml-2、w-2 or w-4) */}
                     <div className={`h-0.5 bg-muted-foreground ml-1 md:ml-2 ${isHalfHour ? 'w-2' : 'w-4'}`}></div>
                   </div>
                 </div>
@@ -707,19 +791,26 @@ export default function HomePage() {
       </div> {/* --- 2. タイムライン本体 終了 --- */}
 
 
-      {/* --- 3. スマホ用ズームボタン (浮遊ボタン) (変更なし) --- */}
+      {/* --- 3. スマホ用ズームボタン (浮遊ボタン) (★★★ ズレ修正 ★★★) --- */}
       <div className="fixed bottom-6 right-6 z-30 flex flex-col gap-3 md:hidden">
+        {/* ★ 変更点: Flexbox中央揃えを「削除」し、元のスタイルに戻す */}
         <button 
-          onClick={zoomIn} 
-          className="w-14 h-14 rounded-full bg-background shadow-lg text-2xl hover:bg-muted"
+          onMouseDown={handleZoomButtonPress}
+          onMouseUp={handleZoomButtonRelease}
+          onTouchStart={handleZoomButtonPress}
+          onTouchEnd={handleZoomButtonRelease}
+          className="w-14 h-14 rounded-full bg-background shadow-lg text-2xl hover:bg-muted active:bg-muted/80"
           disabled={isBatchLoading}
+          title="タップでズームイン、長押しで現在時刻へジャンプ"
         >
           +
         </button>
+        {/* ★ 変更点: Flexbox中央揃えを「削除」し、元のスタイルに戻す */}
         <button 
           onClick={zoomOut}
-          className="w-14 h-14 rounded-full bg-background shadow-lg text-2xl hover:bg-muted"
+          className="w-14 h-14 rounded-full bg-background shadow-lg text-2xl hover:bg-muted active:bg-muted/80"
           disabled={isBatchLoading}
+          title="ズームアウト"
         >
           -
         </button>
